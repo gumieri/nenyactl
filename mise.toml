@@ -1,0 +1,23 @@
+[tools]
+go = "latest"
+
+[tasks.build]
+description = "Build nenyactl binary"
+run = "go build -o bin/nenyactl ./cmd/nenyactl/"
+
+[tasks.test]
+description = "Run tests"
+run = "go test ./..."
+
+[tasks.lint]
+description = "Run linter"
+run = "golangci-lint run ./..."
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = "rm -rf bin/"
+
+[tasks.install]
+description = "Install to /usr/local/bin"
+depends_on = ["build"]
+run = "install -m 755 bin/nenyactl /usr/local/bin/nenyactl"

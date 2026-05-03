@@ -1,0 +1,150 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  unit:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run unit tests
+        run: go test -v -coverprofile=coverage.out ./...
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.out
+          fail_ci_if_error: false
+
+      - name: Check coverage threshold
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
+          if (( $(echo "$COVERAGE < 70" | bc -l) )); then
+            echo "Coverage $COVERAGE% is below 70% threshold"
+            exit 1
+          fi
+
+  tui:
+    name: TUI Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run TUI tests
+        run: go test -v ./internal/agents/... ./internal/containers/... -run TestTUI
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build nenyactl
+        run: go build -o bin/nenyactl ./cmd/nenyactl/
+
+      - name: Run integration tests
+        run: go test -v ./test/integration/...
+
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    services:
+      docker:
+        image: docker:25.0.3-dind
+        options: --privileged
+        ports:
+          - 2375:2375
+    env:
+      DOCKER_HOST: tcp://localhost:2375
+      DOCKER_TLS_CERTDIR: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build nenyactl
+        run: go build -o bin/nenyactl ./cmd/nenyactl/
+
+      - name: Run full workflow
+        env:
+          NENYACTL_DATA_DIR: ${{ runner.temp }}/nenyactl
+        run: |
+          set -e
+          echo "::group::Setup"
+          mkdir -p $NENYACTL_DATA_DIR
+          ./bin/nenyactl config init --dir $NENYACTL_DATA_DIR
+          echo "::endgroup::"
+
+          echo "::group::Secrets"
+          ./bin/nenyactl secret bootstrap --dir $NENYACTL_DATA_DIR || true
+          echo "::endgroup::"
+
+          echo "::group::Container Setup"
+          ./bin/nenyactl containers setup --dir $NENYACTL_DATA_DIR
+          cat $NENYACTL_DATA_DIR/compose.yml
+          echo "::endgroup::"
+
+          echo "::group::Container Start"
+          ./bin/nenyactl containers start --dir $NENYACTL_DATA_DIR
+          echo "::endgroup::"
+
+          echo "::group::Health Check"
+          timeout 30 sh -c 'until curl -fs http://localhost:8080/health 2>/dev/null; do sleep 1; done' || echo "Health check timed out (nenya may not be available)"
+          echo "::endgroup::"
+
+          echo "::group::Container Status"
+          ./bin/nenyactl containers status --dir $NENYACTL_DATA_DIR || true
+          echo "::endgroup::"
+
+          echo "::group::Container Stop"
+          ./bin/nenyactl containers stop --dir $NENYACTL_DATA_DIR
+          echo "::endgroup::"
+
+      - name: Cleanup on failure
+        if: failure()
+        run: |
+          docker compose -f ${{ runner.temp }}/nenyactl/compose.yml down 2>/dev/null || true

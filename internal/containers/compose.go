@@ -1,0 +1,24 @@
+package containers
+
+const ComposeYAML = `services:
+  nenya:
+    image: ghcr.io/gumieri/nenya:latest
+    container_name: nenya
+    ports:
+      - "{{ .ListenAddr }}:8080"
+    volumes:
+      - ./config:/etc/nenya:ro
+      - ./secrets:/run/secrets/nenya:ro
+    environment:
+      NENYA_SECRETS_DIR: /run/secrets/nenya
+    cap_drop:
+      - ALL
+    cap_add:
+      - IPC_LOCK
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64M
+    restart: unless-stopped
+`
