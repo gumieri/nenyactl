@@ -20,9 +20,14 @@ const (
 type Config struct {
 	UserInstall bool
 	Version     string
+	SkipService bool
 }
 
 func Install(ctx context.Context, cfg Config) error {
+	if runtime.GOOS == "windows" {
+		return fmt.Errorf("bare-metal installation is not supported on Windows; use 'nenyactl containers setup' instead")
+	}
+
 	version := cfg.Version
 	if version == "" {
 		var err error
@@ -93,6 +98,63 @@ func Install(ctx context.Context, cfg Config) error {
 	}
 
 	fmt.Printf("Installed nenya %s to %s\n", version, dest)
+
+	if !cfg.SkipService {
+		if err := installService(ctx, dest); err != nil {
+			fmt.Printf("Warning: failed to install service: %v\n", err)
+			fmt.Println("You can run nenya directly from the command line.")
+		}
+	}
+
+	return nil
+}
+
+func installService(ctx context.Context, binaryPath string) error {
+	switch runtime.GOOS {
+	case "linux":
+		return installSystemd(binaryPath)
+	case "darwin":
+		return installLaunchd(binaryPath)
+	}
+	return nil
+}
+
+func installSystemd(binaryPath string) error {
+	systemdDir := "/etc/systemd/system"
+
+	if err := os.MkdirAll(systemdDir, 0o755); err != nil {
+		return fmt.Errorf("create systemd dir: %w", err)
+	}
+
+	servicePath := filepath.Join(systemdDir, "nenya.service")
+	if err := os.WriteFile(servicePath, []byte(SystemdService), 0o644); err != nil {
+		return fmt.Errorf("write service unit: %w", err)
+	}
+
+	socketPath := filepath.Join(systemdDir, "nenya.socket")
+	if err := os.WriteFile(socketPath, []byte(SystemdSocket), 0o644); err != nil {
+		return fmt.Errorf("write socket unit: %w", err)
+	}
+
+	fmt.Printf("Installed systemd units to %s/\n", systemdDir)
+	fmt.Println("To enable and start: sudo systemctl enable --now nenya")
+	return nil
+}
+
+func installLaunchd(binaryPath string) error {
+	launchdDir := "/Library/LaunchDaemons"
+	plistPath := filepath.Join(launchdDir, "com.gumieri.nenya.plist")
+
+	if err := os.MkdirAll(launchdDir, 0o755); err != nil {
+		return fmt.Errorf("create launchd dir: %w", err)
+	}
+
+	if err := os.WriteFile(plistPath, []byte(LaunchdPlist), 0o644); err != nil {
+		return fmt.Errorf("write launchd plist: %w", err)
+	}
+
+	fmt.Printf("Installed launchd plist to %s\n", plistPath)
+	fmt.Println("To enable and start: sudo launchctl load -w /Library/LaunchDaemons/com.gumieri.nenya.plist")
 	return nil
 }
 
@@ -108,7 +170,6 @@ func download(ctx context.Context, url, dest string) error {
 	if err != nil {
 		return err
 	}
-
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err

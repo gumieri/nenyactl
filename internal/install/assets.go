@@ -61,6 +61,63 @@ Accept=no
 WantedBy=sockets.target
 `
 
+const LaunchdPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+        "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.gumieri.nenya</string>
+
+    <key>Program</key>
+    <string>/usr/local/bin/nenya</string>
+
+    <key>UserName</key>
+    <string>root</string>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>core</key>
+        <integer>0</integer>
+        <key>memlock</key>
+        <integer>-1</integer>
+    </dict>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>memlock</key>
+        <integer>-1</integer>
+    </dict>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NENYA_CONFIG_DIR</key>
+        <string>/etc/nenya</string>
+        <key>NENYA_SECRETS_DIR</key>
+        <string>/etc/nenya</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/nenya.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/nenya.err</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>EnableTransactions</key>
+    <false/>
+</dict>
+</plist>
+`
+
 const ExampleConfig = `{
   "server": {
     "listen_addr": ":8080",

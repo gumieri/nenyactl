@@ -28,26 +28,61 @@ mise run build
 ## Quick Start
 
 ```bash
-# Set up Nenya with interactive API key entry
-nenyactl containers setup
+# Install Nenya binary and configure as a service
+sudo nenyactl install
 
-# Start the containers
-nenyactl containers start
+# Enable and start the service
+nenyactl service start
 
-# Check status and health
-nenyactl containers status
+# Or use containers instead (all platforms, or Windows-only)
+nenyactl containers setup --start
+
+# Check status
+nenyactl service status
 ```
 
-The setup command:
-- Creates a data directory (default: `~/.local/share/nenyactl/nenya`)
-- Generates `config/config.json` with example configuration
-- Generates `secrets/01-client.json` with a random authentication token
-- Prompts you for provider API keys (Gemini, DeepSeek, Anthropic, OpenAI, Mistral, xAI) via TUI
-- Creates `compose.yml` ready for `podman compose` or `docker compose`
+The `install` command:
+- Downloads the latest Nenya binary from GitHub releases
+- Installs it to `/usr/local/bin/nenya`
+- **Linux**: Creates systemd units (`nenya.service` + `nenya.socket`) in `/etc/systemd/system/`
+- **macOS**: Creates a launchd plist in `/Library/LaunchDaemons/com.gumieri.nenya.plist`
+- **Windows**: Not supported — use `nenyactl containers setup` instead
 
 ## Usage
 
-### Container Management
+### Service Management (Linux / macOS)
+
+```bash
+# Start the service
+nenyactl service start
+
+# Stop the service
+nenyactl service stop
+
+# Check status
+nenyactl service status
+
+# Reload configuration (SIGHUP)
+nenyactl service reload
+```
+
+### Binary Installation
+
+```bash
+# Install latest version with service configuration (requires sudo)
+sudo nenyactl install
+
+# Install specific version
+sudo nenyactl install v0.1.0
+
+# Install binary only, skip service setup
+sudo nenyactl install --skip-service
+
+# Install to user bin dir (no service setup)
+nenyactl install --user --skip-service
+```
+
+### Container Management (all platforms, opt-in on Linux/macOS)
 
 ```bash
 # Create a new deployment (interactive API key setup)
@@ -128,12 +163,14 @@ nenyactl version
 
 | Command | Description |
 |---------|-------------|
+| `install [version]` | Install Nenya binary and service (systemd/launchd) |
+| `install --skip-service` | Install binary only, no service |
+| `service start/stop/status/reload` | Manage the Nenya service |
 | `agents` | Configure agents via interactive TUI |
 | `containers setup` | Create a new container deployment with TUI for API keys |
 | `containers start` | Start Nenya containers |
 | `containers stop` | Stop Nenya containers |
 | `containers status` | Show container status and health check |
-| `install [version]` | Download and install nenya binary |
 | `config init` | Create initial configuration |
 | `secret bootstrap` | Create secrets.json with generated tokens |
 | `secret generate` | Generate client tokens or API keys |
@@ -143,7 +180,13 @@ nenyactl version
 
 Nenya reads configuration from `/etc/nenya/` (directory mode) or a single JSON file.
 
-Default container data location:
+Default paths:
+- **Config**: `/etc/nenya/config.json`
+- **Secrets**: `/etc/nenya/secrets.json`
+- **Linux service**: systemd — `nenya.service` + `nenya.socket`
+- **macOS service**: launchd — `com.gumieri.nenya.plist` in `/Library/LaunchDaemons/`
+
+Container data location (if using containers):
 - **Linux**: `~/.local/share/nenyactl/nenya`
 - **macOS**: `~/Library/Application Support/nenyactl/nenya`
 - **Windows**: `%LOCALAPPDATA%\nenyactl\nenya`

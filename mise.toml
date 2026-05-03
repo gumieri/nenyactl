@@ -19,5 +19,5 @@ run = "rm -rf bin/"
 
 [tasks.install]
 description = "Install to /usr/local/bin"
-depends_on = ["build"]
+depends = ["build"]
 run = "install -m 755 bin/nenyactl /usr/local/bin/nenyactl"
