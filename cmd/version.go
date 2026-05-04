@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/gumieri/nenyactl/internal/install"
+	"github.com/gumieri/nenyactl/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -19,7 +20,7 @@ func init() {
 }
 
 func runVersion(cmd *cobra.Command, args []string) error {
-	fmt.Println(infoStyle.Render("›"), "nenyactl v0.1.0")
+	fmt.Println(infoStyle.Render("›"), "nenyactl v"+version.Version)
 
 	ctx := cmd.Context()
 	latest, err := install.CheckLatestVersion(ctx)

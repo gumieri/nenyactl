@@ -1,0 +1,117 @@
+version: 2
+project_name: nenyactl
+env:
+  - GOFLAGS=-mod=readonly
+
+before:
+  hooks:
+    - go test ./... -race -timeout 5m
+    - go vet ./...
+
+builds:
+  - &build_defaults
+    id: nenyactl-linux
+    binary: nenyactl
+    goos: [linux]
+    goarch: [amd64, arm64]
+    env: &build_env
+      - CGO_ENABLED=0
+    ldflags: &ldflags
+      - -s -w
+      - -X github.com/gumieri/nenyactl/internal/version.Version={{.Version}}
+      - -X github.com/gumieri/nenyactl/internal/version.Commit={{.Commit}}
+      - -X github.com/gumieri/nenyactl/internal/version.BuildTime={{.Date}}
+    main: ./cmd/nenyactl
+
+  - <<: *build_defaults
+    id: nenyactl-darwin
+    goos: [darwin]
+
+archives:
+  - id: linux
+    builds: [nenyactl-linux]
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
+
+  - id: darwin
+    builds: [nenyactl-darwin]
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
+
+nfpms:
+  - id: nenyactl
+    package_name: nenyactl
+    bindir: /usr/bin
+    formats:
+      - deb
+      - rpm
+      - archlinux
+    maintainer: Rafael Gumieri <rgumieri@gmail.com>
+    description: |
+      nenyactl is a CLI tool for managing the Nenya AI API Gateway.
+      It streamlines container orchestration, secret management, and
+      configuration for Nenya deployments.
+    homepage: https://github.com/gumieri/nenyactl
+    license: MIT
+
+aurs:
+  - name: nenyactl-bin
+    description: CLI tool for managing the Nenya AI API Gateway.
+    homepage: https://github.com/gumieri/nenyactl
+    license: MIT
+    provides:
+      - nenyactl
+    conflicts:
+      - nenyactl
+    git_url: ssh://aur@aur.archlinux.org/nenyactl-bin.git
+    private_key: "{{ .Env.AUR_KEY }}"
+    package: |
+      install -Dm755 "./nenyactl" "${pkgdir}/usr/bin/nenyactl"
+
+nix:
+  - name: nenyactl
+    description: CLI tool for managing the Nenya AI API Gateway.
+    homepage: https://github.com/gumieri/nenyactl
+    license: mit
+    repository:
+      owner: gumieri
+      name: nur-packages
+      branch: main
+
+brews:
+  - name: nenyactl
+    repository:
+      owner: gumieri
+      name: homebrew-tap
+      branch: main
+    homepage: https://github.com/gumieri/nenyactl
+    description: CLI tool for managing the Nenya AI API Gateway.
+    license: MIT
+    commit_author:
+      name: Rafael Gumieri
+      email: rgumieri@gmail.com
+    install: |
+      bin.install "nenyactl"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^Merge pull request"
+      - "^Merge branch"
+      - "^refactor:"
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  github:
+    owner: gumieri
+    name: nenyactl
+  mode: replace
+  name_template: "nenyactl {{ .Version }}"
+  draft: false
+  prerelease: auto

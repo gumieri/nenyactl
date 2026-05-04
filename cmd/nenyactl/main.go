@@ -5,17 +5,18 @@ import (
 	"runtime/debug"
 
 	"github.com/gumieri/nenyactl/cmd"
+	"github.com/gumieri/nenyactl/internal/version"
 )
 
-var version = "0.1.0"
-
 func main() {
-	info, ok := debug.ReadBuildInfo()
-	if ok {
-		for _, setting := range info.Settings {
-			if setting.Key == "vcs.revision" {
-				version = setting.Value[:8]
-				break
+	if version.Version == "dev" {
+		if info, ok := debug.ReadBuildInfo(); ok {
+			for _, setting := range info.Settings {
+				if setting.Key == "vcs.revision" {
+					version.Version = setting.Value[:8]
+					version.Commit = setting.Value
+					break
+				}
 			}
 		}
 	}
