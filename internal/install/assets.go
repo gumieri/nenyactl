@@ -1,138 +1,30 @@
 package install
 
-const SystemdService = `# Nenya AI Gateway - systemd service unit
-#
-# Managed by nenyactl. See: https://github.com/gumieri/nenyactl
-
-[Unit]
-Description=Nenya AI Gateway & Bouncer
-Requires=nenya.socket
-After=nenya.socket
-
-[Service]
-Type=simple
-DynamicUser=yes
-ExecStart=/usr/local/bin/nenya
-ExecReload=/bin/kill -HUP $MAINPID
-Restart=on-failure
-RestartSec=5s
-
-NoNewPrivileges=yes
-LockPersonality=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-RestrictNamespaces=yes
-
-PrivateTmp=yes
-PrivateDevices=yes
-ProtectSystem=strict
-ProtectHome=yes
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
-ProtectClock=yes
-ProtectHostname=yes
-ProtectProc=invisible
-RemoveIPC=yes
-UMask=0077
-
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-MemoryDenyWriteExecute=yes
-LimitMEMLOCK=infinity
-
-LoadCredential=secrets:/etc/nenya/secrets.json
-
-[Install]
-WantedBy=multi-user.target
-`
-
-const SystemdSocket = `# Nenya AI Gateway - systemd socket unit
-#
-# Managed by nenyactl. See: https://github.com/gumieri/nenyactl
-
-[Unit]
-Description=Nenya AI Gateway Socket
-
-[Socket]
-ListenStream=8080
-Accept=no
-
-[Install]
-WantedBy=sockets.target
-`
-
-const LaunchdPlist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-        "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.gumieri.nenya</string>
-
-    <key>Program</key>
-    <string>/usr/local/bin/nenya</string>
-
-    <key>UserName</key>
-    <string>root</string>
-
-    <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
-    <key>ThrottleInterval</key>
-    <integer>5</integer>
-
-    <key>HardResourceLimits</key>
-    <dict>
-        <key>core</key>
-        <integer>0</integer>
-        <key>memlock</key>
-        <integer>-1</integer>
-    </dict>
-    <key>SoftResourceLimits</key>
-    <dict>
-        <key>memlock</key>
-        <integer>-1</integer>
-    </dict>
-
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>NENYA_CONFIG_DIR</key>
-        <string>/etc/nenya</string>
-        <key>NENYA_SECRETS_DIR</key>
-        <string>/etc/nenya</string>
-    </dict>
-
-    <key>StandardOutPath</key>
-    <string>/var/log/nenya.log</string>
-    <key>StandardErrorPath</key>
-    <string>/var/log/nenya.err</string>
-
-    <key>RunAtLoad</key>
-    <true/>
-
-    <key>EnableTransactions</key>
-    <false/>
-</dict>
-</plist>
-`
-
 const ExampleConfig = `{
+  // Nenya Configuration
   "server": {
     "listen_addr": ":8080",
     "max_body_bytes": 10485760
   },
+
+  // Context management: truncation strategies and TF-IDF relevance scoring
+  "context": {
+    "truncation_strategy": "middle-out",
+    "truncation_keep_first_pct": 15.0,
+    "truncation_keep_last_pct": 25.0
+  },
+
+  // Governance: rate limiting, routing, and request lifecycle
   "governance": {
     "ratelimit_max_tpm": 250000,
-    "ratelimit_max_rpm": 15,
-    "truncation_strategy": "middle-out",
-    "keep_first_percent": 15.0,
-    "keep_last_percent": 25.0
+    "ratelimit_max_rpm": 15
   },
-  "security_filter": {
+
+  // Bouncer: LLM-based privacy filter for sensitive data redaction
+  "bouncer": {
     "enabled": true,
-    "skip_on_engine_failure": true,
+    "redaction_label": "[REDACTED]",
+    "fail_open": true,
     "engine": {
       "provider": "ollama",
       "model": "qwen2.5-coder:7b",
@@ -140,19 +32,21 @@ const ExampleConfig = `{
       "timeout_seconds": 60
     }
   },
+
+  // Prefix cache alignment for better upstream cache hits
   "prefix_cache": {
     "enabled": true,
     "pin_system_first": true,
     "stable_tools": true,
     "skip_redaction_on_system": true
   },
+
+  // Compaction presets: "aggressive", "balanced", or "minimal"
   "compaction": {
-    "enabled": true,
-    "json_minify": true,
-    "collapse_blank_lines": true,
-    "trim_trailing_whitespace": true,
-    "normalize_line_endings": true
+    "compaction_preset": "balanced"
   },
+
+  // Window: sliding context window with summarization
   "window": {
     "enabled": false,
     "mode": "summarize",
@@ -167,6 +61,18 @@ const ExampleConfig = `{
       "timeout_seconds": 60
     }
   },
+
+  // Response cache: LRU cache for upstream completions
+  "response_cache": {
+    "enabled": false,
+    "max_entries": 512,
+    "max_entry_bytes": 1048576,
+    "ttl_seconds": 3600,
+    "evict_every_seconds": 300,
+    "force_refresh_header": "x-nenya-cache-force-refresh"
+  },
+
+  // Agents: named model groups with fallback chains
   "agents": {
     "build": {
       "strategy": "fallback",
@@ -178,6 +84,8 @@ const ExampleConfig = `{
       ]
     }
   },
+
+  // Provider endpoint configurations
   "providers": {
     "gemini": {
       "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",

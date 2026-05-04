@@ -8,12 +8,17 @@ import (
 )
 
 const ExampleConfig = `{
-  // Server — see docs/CONFIGURATION.md for all options
+  // Server — see docs/CONFIG.md for all options
   "server": {
     "listen_addr": ":8080"
   },
 
-  // Governance: rate limiting, truncation, routing
+  // Context: truncation strategies, TF-IDF relevance scoring
+  "context": {
+    "truncation_strategy": "middle-out"
+  },
+
+  // Governance: rate limiting, routing
   "governance": {
     "ratelimit_max_tpm": 250000,
     "ratelimit_max_rpm": 15
@@ -31,14 +36,13 @@ const ExampleConfig = `{
     "enabled": true
   },
 
-  // Text compaction: minifies JSON, normalizes whitespace
+  // Compaction presets: "aggressive", "balanced", or "minimal"
   "compaction": {
-    "enabled": true,
-    "json_minify": true
+    "compaction_preset": "balanced"
   },
 
-  // Security filter: regex-based secret redaction
-  // "security_filter": {
+  // Bouncer: LLM-based privacy filter for sensitive data redaction
+  // "bouncer": {
   //   "enabled": true,
   //   "engine": { "provider": "ollama", "model": "qwen2.5-coder:7b" }
   // },

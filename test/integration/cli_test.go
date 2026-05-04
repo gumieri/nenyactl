@@ -8,7 +8,34 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 )
+
+// stripJSONComments removes // line comments from JSON, matching nenya's Config.StripComments.
+func stripJSONComments(src []byte) []byte {
+	var out []byte
+	lines := strings.Split(string(src), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimLeftFunc(line, unicode.IsSpace)
+		if strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		// Also strip trailing // comments (but beware of // in strings)
+		idx := strings.Index(trimmed, "//")
+		if idx > 0 {
+			// Check we're not inside a JSON string
+			before := trimmed[:idx]
+			if strings.Count(before, "\"")%2 == 0 {
+				out = append(out, before...)
+				out = append(out, '\n')
+				continue
+			}
+		}
+		out = append(out, line...)
+		out = append(out, '\n')
+	}
+	return out
+}
 
 const nenyactlBin = "bin/nenyactl"
 
@@ -63,9 +90,10 @@ func TestConfigInit(t *testing.T) {
 		t.Fatalf("read config.json: %v", err)
 	}
 
+	stripped := stripJSONComments(data)
 	var cfg map[string]any
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		t.Errorf("config.json is not valid JSON: %v", err)
+	if err := json.Unmarshal(stripped, &cfg); err != nil {
+		t.Errorf("config.json is not valid JSON (after stripping comments): %v", err)
 	}
 }
 

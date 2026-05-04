@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -53,7 +54,7 @@ func runServiceStart(cmd *cobra.Command, args []string) error {
 	case "darwin":
 		return launchctl("load", "/Library/LaunchDaemons/com.gumieri.nenya.plist")
 	default:
-		return fmt.Errorf("service management not supported on %s", runtime.GOOS)
+		return fmt.Errorf("service management not supported on %s; use 'nenyactl containers setup' instead", runtime.GOOS)
 	}
 }
 
@@ -64,7 +65,7 @@ func runServiceStop(cmd *cobra.Command, args []string) error {
 	case "darwin":
 		return launchctl("unload", "/Library/LaunchDaemons/com.gumieri.nenya.plist")
 	default:
-		return fmt.Errorf("service management not supported on %s", runtime.GOOS)
+		return fmt.Errorf("service management not supported on %s; use 'nenyactl containers setup' instead", runtime.GOOS)
 	}
 }
 
@@ -75,30 +76,22 @@ func runServiceStatus(cmd *cobra.Command, args []string) error {
 	case "darwin":
 		return showLaunchdStatus()
 	default:
-		return fmt.Errorf("service management not supported on %s", runtime.GOOS)
+		return fmt.Errorf("service management not supported on %s; use 'nenyactl containers setup' instead", runtime.GOOS)
 	}
 }
 
 func showLaunchdStatus() error {
-	// launchctl list | grep com.gumieri.nenya
-	grep := exec.Command("grep", "com.gumieri.nenya")
-	list := exec.Command("launchctl", "list")
-	pipe, err := list.StdoutPipe()
+	out, err := exec.Command("launchctl", "list").Output()
 	if err != nil {
-		return err
-	}
-	grep.Stdin = pipe
-	grep.Stdout = nil
-
-	if err := list.Start(); err != nil {
 		return fmt.Errorf("launchctl list: %w", err)
 	}
-	out, err := grep.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("nenya service not found in launchd")
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, "com.gumieri.nenya") {
+			fmt.Println(line)
+			return nil
+		}
 	}
-	fmt.Print(string(out))
-	return nil
+	return fmt.Errorf("nenya service not found in launchd")
 }
 
 func runServiceReload(cmd *cobra.Command, args []string) error {
@@ -111,7 +104,7 @@ func runServiceReload(cmd *cobra.Command, args []string) error {
 		}
 		return launchctl("load", "/Library/LaunchDaemons/com.gumieri.nenya.plist")
 	default:
-		return fmt.Errorf("service management not supported on %s", runtime.GOOS)
+		return fmt.Errorf("service management not supported on %s; use 'nenyactl containers setup' instead", runtime.GOOS)
 	}
 }
 
