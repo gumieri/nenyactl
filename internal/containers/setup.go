@@ -89,7 +89,7 @@ func Setup(cfg SetupConfig) error {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(secretsDir, 0o600); err != nil {
+	if err := os.MkdirAll(secretsDir, 0o700); err != nil {
 		return err
 	}
 
