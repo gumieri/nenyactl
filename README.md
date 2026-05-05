@@ -12,6 +12,54 @@ Command-line tool to install and manage Nenya AI Gateway using containers (Podma
 
 ## Installation
 
+### Homebrew (macOS / Linux)
+
+```bash
+brew install gumieri/tap/nenyactl
+```
+
+### mise (all platforms)
+
+```bash
+# Install globally (no repo clone needed)
+mise use -g go:github.com/gumieri/nenyactl/cmd/nenyactl
+```
+
+### Arch Linux (AUR)
+
+```bash
+yay -S nenyactl-bin
+```
+
+### Nix / NixOS
+
+```bash
+nix-env -iA gumieri.nenyactl
+```
+
+### Binary tarball (Linux / macOS)
+
+```bash
+# latest, Linux amd64
+curl -fsSL https://github.com/gumieri/nenyactl/releases/latest/download/nenyactl_linux_amd64.tar.gz | tar -xz
+sudo install -m 755 nenyactl /usr/local/bin/
+
+# latest, macOS (Apple Silicon)
+curl -fsSL https://github.com/gumieri/nenyactl/releases/latest/download/nenyactl_darwin_arm64.tar.gz | tar -xz
+sudo install -m 755 nenyactl /usr/local/bin/
+```
+
+### System packages (Linux)
+
+```bash
+# Debian / Ubuntu
+curl -fsSL https://github.com/gumieri/nenyactl/releases/latest/download/nenyactl_linux_amd64.deb -o nenyactl.deb
+sudo dpkg -i nenyactl.deb
+
+# Fedora / RHEL
+sudo dnf install https://github.com/gumieri/nenyactl/releases/latest/download/nenyactl_linux_amd64.rpm
+```
+
 ### From Source
 
 ```bash
@@ -19,10 +67,10 @@ go build -o nenyactl ./cmd/nenyactl/
 install -m 755 nenyactl /usr/local/bin/
 ```
 
-Or with mise:
+Or use the local mise tasks (requires cloning the repo):
 
 ```bash
-mise run build
+mise install
 ```
 
 ## Quick Start
@@ -102,21 +150,6 @@ nenyactl containers stop
 
 # Show status and health check
 nenyactl containers status
-```
-
-### Binary Installation
-
-For advanced use cases, you can download the nenya binary directly:
-
-```bash
-# Install latest version
-sudo nenyactl install
-
-# Install specific version
-sudo nenyactl install v0.1.0
-
-# Install to user bin dir (no sudo)
-nenyactl install --user
 ```
 
 ### Configuration Management
@@ -219,6 +252,24 @@ curl -H "Authorization: Bearer $(jq -r '.client_token' secrets/01-client.json)" 
 
 ## Development
 
+With mise (requires cloning the repo):
+
+```bash
+# Build
+mise run build
+
+# Test
+mise run test
+
+# Lint
+mise run lint
+
+# Install locally
+mise run install
+```
+
+Or directly with Go:
+
 ```bash
 # Build
 go build -o bin/nenyactl ./cmd/nenyactl/
@@ -229,6 +280,6 @@ go test ./...
 # Lint
 golangci-lint run ./...
 
-# Install locally
-mise run install
+# Install
+install -m 755 bin/nenyactl /usr/local/bin/
 ```
