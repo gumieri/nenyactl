@@ -93,6 +93,7 @@ jobs:
     env:
       DOCKER_HOST: tcp://localhost:2375
       DOCKER_TLS_CERTDIR: ""
+      NENYACTL_RUNTIME: docker
     steps:
       - name: Checkout
         uses: actions/checkout@v4

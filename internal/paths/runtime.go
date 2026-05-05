@@ -1,6 +1,7 @@
 package paths
 
 import (
+	"os"
 	"os/exec"
 )
 
@@ -12,6 +13,14 @@ const (
 )
 
 func DetectRuntime() Runtime {
+	if r := os.Getenv("NENYACTL_RUNTIME"); r != "" {
+		switch Runtime(r) {
+		case Docker:
+			return Docker
+		case Podman:
+			return Podman
+		}
+	}
 	if _, err := exec.LookPath("podman"); err == nil {
 		return Podman
 	}
