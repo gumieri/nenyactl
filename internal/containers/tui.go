@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/gumieri/nenyactl/internal/tui"
 )
 
 type ProviderDef struct {
@@ -46,39 +49,94 @@ type screen int
 const (
 	screenSelect screen = iota
 	screenKeys
+	screenCustom
 )
+
+type tuiModel struct {
+	screen        screen
+	providers     []ProviderDef
+	selected      map[int]bool
+	table         table.Model
+	customName    textinput.Model
+	customKey     textinput.Model
+	customFocus   int
+	customResults []customResult
+	keys          []keyField
+	keyCursor     int
+	quitting      bool
+	width, height int
+	helpModel     help.Model
+	helpKM        tui.KeyMap
+}
 
 type keyField struct {
 	name  string
 	input textinput.Model
 }
 
-type keyResult struct {
+type customResult struct {
 	Name  string
 	Value string
 }
 
-type tuiModel struct {
-	state         screen
-	providers     []ProviderDef
-	selected      map[int]bool
-	cursor        int
-	fields        []keyField
-	fieldCursor   int
-	done          bool
-	quitting      bool
-	customName    string
-	customResults []keyResult
-	showCustom    int
-	customInputs  []textinput.Model
-	customCursor  int
-}
-
 func newTUIModel() tuiModel {
+	sort.Slice(BuiltinProviders, func(i, j int) bool {
+		if BuiltinProviders[i].NeedsKey != BuiltinProviders[j].NeedsKey {
+			return BuiltinProviders[i].NeedsKey
+		}
+		return BuiltinProviders[i].Name < BuiltinProviders[j].Name
+	})
+
+	cols := []table.Column{
+		{Title: " ", Width: 3},
+		{Title: "Provider", Width: 18},
+		{Title: "Description", Width: 25},
+		{Title: "Key Required", Width: 14},
+	}
+
+	rows := []table.Row{}
+	for _, p := range BuiltinProviders {
+		rows = append(rows, table.Row{"  ", p.Name, p.Help, keyReqText(p)})
+	}
+	rows = append(rows, table.Row{"  ", "+ Add custom provider...", "", ""})
+
+	t := table.New(
+		table.WithColumns(cols),
+		table.WithRows(rows),
+		table.WithFocused(true),
+		table.WithHeight(15),
+	)
+
+	theme := tui.Current()
+	s := table.DefaultStyles()
+	s.Header = s.Header.
+		Foreground(theme.Title.GetForeground()).
+		BorderStyle(theme.Border).
+		BorderForeground(theme.BorderColor.GetForeground())
+	s.Selected = theme.SelectedRow
+	s.Cell = theme.Body
+	t.SetStyles(s)
+
+	customName := textinput.New()
+	customName.Placeholder = "my-custom-provider"
+	customName.CharLimit = 128
+	customName.Width = 40
+
+	customKey := textinput.New()
+	customKey.Placeholder = "sk-..."
+	customKey.CharLimit = 256
+	customKey.Width = 50
+
 	return tuiModel{
-		state:     screenSelect,
+		screen:    screenSelect,
 		providers: BuiltinProviders,
 		selected:  make(map[int]bool),
+		table:     t,
+		customName:  customName,
+		customKey:   customKey,
+		customFocus: 0,
+		helpModel:   tui.NewHelpModel(),
+		helpKM:      tui.ListKeyMap,
 	}
 }
 
@@ -87,41 +145,60 @@ func (m tuiModel) Init() tea.Cmd {
 }
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		if m.state == screenSelect {
+		switch m.screen {
+		case screenSelect:
 			return m.updateSelect(msg)
+		case screenKeys:
+			return m.updateKeys(msg)
+		case screenCustom:
+			return m.updateCustom(msg)
 		}
-		return m.updateKeys(msg)
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		h := msg.Height - 6
+		if h < 5 {
+			h = 5
+		}
+		m.table.SetHeight(h)
+		m.table.SetWidth(msg.Width - 4)
 	}
-	return m, nil
+
+	if m.screen == screenSelect {
+		m.table, cmd = m.table.Update(msg)
+	} else if m.screen == screenKeys {
+		if m.keyCursor < len(m.keys) {
+			m.keys[m.keyCursor].input, cmd = m.keys[m.keyCursor].input.Update(msg)
+		}
+	} else if m.screen == screenCustom {
+		if m.customFocus == 0 {
+			m.customName, cmd = m.customName.Update(msg)
+		} else {
+			m.customKey, cmd = m.customKey.Update(msg)
+		}
+	}
+
+	return m, cmd
 }
 
-func (m tuiModel) updateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	totalItems := len(m.providers) + 1 // +1 for custom provider entry
-
+func (m *tuiModel) updateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "esc":
 		m.quitting = true
-		m.done = true
+		return m, tea.Quit
+
+	case "q":
+		m.quitting = true
 		return m, tea.Quit
 
 	case "enter":
-		if m.cursor == len(m.providers) {
-			m.showCustom = 0
-			ci := textinput.New()
-			ci.Placeholder = "my-custom-provider"
-			ci.CharLimit = 128
-			ci.Width = 40
-			m.customInputs = []textinput.Model{ci}
-
-			ki := textinput.New()
-			ki.Placeholder = "sk-..."
-			ki.CharLimit = 256
-			ki.Width = 50
-			m.customInputs = append(m.customInputs, ki)
-			m.customCursor = 0
-			return m, ci.Focus()
+		if m.table.Cursor() == len(m.providers) {
+			m.screen = screenCustom
+			m.customFocus = 0
+			return m, m.customName.Focus()
 		}
 
 		selectedCount := 0
@@ -130,49 +207,39 @@ func (m tuiModel) updateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				selectedCount++
 			}
 		}
+
 		if selectedCount == 0 {
-			return m, nil
+			m.quitting = true
+			return m, tea.Quit
 		}
 
-		m.state = screenKeys
-		m.fields = nil
-		m.fieldCursor = 0
+		m.screen = screenKeys
+		m.keys = nil
+		m.keyCursor = 0
+
 		for i, p := range m.providers {
 			if m.selected[i] && p.NeedsKey {
 				ti := textinput.New()
 				ti.Placeholder = p.Auth
 				ti.CharLimit = 256
 				ti.Width = 60
-				m.fields = append(m.fields, keyField{name: p.Name, input: ti})
+				m.keys = append(m.keys, keyField{name: p.Name, input: ti})
 			}
 		}
-		if len(m.fields) > 0 {
-			return m, m.fields[0].input.Focus()
+
+		if len(m.keys) > 0 {
+			m.keys[0].input.Focus()
+		} else {
+			m.quitting = true
+			return m, tea.Quit
 		}
-		m.done = true
-		return m, tea.Quit
 
 	case " ":
-		if m.cursor < len(m.providers) {
-			m.selected[m.cursor] = !m.selected[m.cursor]
+		idx := m.table.Cursor()
+		if idx < len(m.providers) {
+			m.selected[idx] = !m.selected[idx]
+			m.updateTableRow(idx)
 		}
-		return m, nil
-
-	case "up", "k":
-		if m.cursor > 0 {
-			m.cursor--
-		}
-		return m, nil
-
-	case "down", "j":
-		if m.cursor < totalItems-1 {
-			m.cursor++
-		}
-		return m, nil
-	}
-
-	if m.showCustom >= 0 && m.customCursor >= 0 {
-		return m.updateCustom(msg)
 	}
 
 	return m, nil
@@ -180,163 +247,235 @@ func (m tuiModel) updateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *tuiModel) updateCustom(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "enter":
-		if m.customCursor == 1 {
-			name := m.customInputs[0].Value()
-			key := m.customInputs[1].Value()
-			if name != "" && key != "" {
-				m.customResults = append(m.customResults, keyResult{Name: name, Value: key})
-			}
-			m.showCustom++
-			ci := textinput.New()
-			ci.Placeholder = "my-custom-provider"
-			ci.CharLimit = 128
-			ci.Width = 40
-			m.customInputs = []textinput.Model{ci}
-			ki := textinput.New()
-			ki.Placeholder = "sk-..."
-			ki.CharLimit = 256
-			ki.Width = 50
-			m.customInputs = append(m.customInputs, ki)
-			m.customCursor = 0
-			return m, ci.Focus()
-		}
-		m.showCustom = -1
-		m.customCursor = -1
+	case "esc":
+		m.screen = screenSelect
 		return m, nil
 
-	case "esc":
-		m.showCustom = -1
-		m.customCursor = -1
-		return m, nil
+	case "enter":
+		if m.customFocus == 0 {
+			m.customFocus = 1
+			return m, m.customKey.Focus()
+		}
+
+		name := m.customName.Value()
+		key := m.customKey.Value()
+		if name != "" && key != "" {
+			m.customResults = append(m.customResults, customResult{Name: name, Value: key})
+
+			m.customName.Reset()
+			m.customKey.Reset()
+			m.customFocus = 0
+			return m, m.customName.Focus()
+		}
 
 	case "tab":
-		m.customCursor = (m.customCursor + 1) % len(m.customInputs)
-		return m, m.customInputs[m.customCursor].Focus()
-
-	case "shift+tab":
-		m.customCursor = (m.customCursor - 1 + len(m.customInputs)) % len(m.customInputs)
-		return m, m.customInputs[m.customCursor].Focus()
-	}
-
-	var cmd tea.Cmd
-	m.customInputs[m.customCursor], cmd = m.customInputs[m.customCursor].Update(msg)
-	return m, cmd
-}
-
-func (m tuiModel) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+c", "esc":
-		m.done = true
-		return m, tea.Quit
-
-	case "enter":
-		m.done = true
-		return m, tea.Quit
-
-	case "tab", "down":
-		if m.fieldCursor < len(m.fields)-1 {
-			m.fields[m.fieldCursor].input.Blur()
-			m.fieldCursor++
-			return m, m.fields[m.fieldCursor].input.Focus()
+		m.customFocus = (m.customFocus + 1) % 2
+		if m.customFocus == 0 {
+			return m, m.customName.Focus()
 		}
-		return m, nil
-
-	case "shift+tab", "up":
-		if m.fieldCursor > 0 {
-			m.fields[m.fieldCursor].input.Blur()
-			m.fieldCursor--
-			return m, m.fields[m.fieldCursor].input.Focus()
-		}
-		return m, nil
+		return m, m.customKey.Focus()
 	}
 
-	if m.fieldCursor < len(m.fields) {
-		m.fields[m.fieldCursor].input, _ = m.fields[m.fieldCursor].input.Update(msg)
-	}
 	return m, nil
 }
 
+func (m *tuiModel) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "esc":
+		m.quitting = true
+		return m, tea.Quit
+
+	case "enter":
+		m.quitting = true
+		return m, tea.Quit
+
+	case "tab":
+		if m.keyCursor < len(m.keys)-1 {
+			m.keys[m.keyCursor].input.Blur()
+			m.keyCursor++
+			return m, m.keys[m.keyCursor].input.Focus()
+		}
+	}
+
+	return m, nil
+}
+
+func (m *tuiModel) updateTableRow(idx int) {
+	rows := m.table.Rows()
+	for i := range m.providers {
+		check := "  "
+		if m.selected[i] {
+			check = "✓ "
+		}
+		if i < len(rows) {
+			rows[i] = table.Row{check, m.providers[i].Name, m.providers[i].Help, keyReqText(m.providers[i])}
+		}
+	}
+	m.table.SetRows(rows)
+}
+
+func keyReqText(p ProviderDef) string {
+	if !p.NeedsKey {
+		return "(none)"
+	}
+	return p.Auth
+}
+
 func (m tuiModel) View() string {
-	if m.quitting || (m.done && m.state == screenSelect && len(m.fields) == 0) {
+	theme := tui.Current()
+
+	if m.quitting {
 		return ""
 	}
 
-	if m.state == screenKeys {
-		return m.renderKeys()
+	var content string
+	switch m.screen {
+	case screenSelect:
+		content = m.renderSelect()
+	case screenKeys:
+		content = m.renderKeys()
+	case screenCustom:
+		content = m.renderCustom()
 	}
-	return m.renderSelect()
+
+	helpView := m.helpModel.View(m.helpKM)
+
+	h := lipgloss.JoinVertical(lipgloss.Top,
+		content,
+		"",
+		helpView,
+	)
+
+	return theme.App.Render(h)
 }
 
 func (m tuiModel) renderSelect() string {
-	s := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).Render("Select providers to configure") + "\n"
-	s += lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  Space to toggle · ↑/↓ to navigate · Enter to continue · Esc to skip\n") + "\n"
+	theme := tui.Current()
 
-	for i, p := range m.providers {
-		check := " "
-		if m.selected[i] {
-			check = "x"
-		}
-		cursor := "  "
-		if i == m.cursor {
-			cursor = "> "
-		}
+	title := theme.Title.Render("Select Providers to Configure")
+	subtitle := theme.Dimmed.Render("Choose providers to add API keys for")
 
-		style := lipgloss.NewStyle()
-		if !m.selected[i] {
-			style = style.Foreground(lipgloss.Color("7"))
-		} else {
-			style = style.Foreground(lipgloss.Color("10"))
-		}
+	baseStyle := lipgloss.NewStyle().
+		Width(m.width).
+		BorderStyle(theme.Border).
+		BorderForeground(theme.BorderColor.GetForeground()).
+		Padding(1, 2)
 
-		auth := ""
-		if !p.NeedsKey {
-			auth = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" (no key needed)")
-		}
+	tbl := m.table.View()
+	wrapped := lipgloss.NewStyle().Width(m.width - 6).Render(tbl)
 
-		s += fmt.Sprintf("%s[%s] %s%s%s\n",
-			cursor,
-			style.Render(check),
-			style.Render(p.Name),
-			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" ("+p.Help+")"),
-			auth,
-		)
+	body := lipgloss.JoinVertical(lipgloss.Top,
+		title,
+		"",
+		subtitle,
+		"",
+		wrapped,
+	)
+
+	return baseStyle.Render(body)
+}
+
+func (m tuiModel) renderCustom() string {
+	theme := tui.Current()
+
+	title := theme.Title.Render("Add Custom Provider")
+
+	nameFocus := ""
+	keyFocus := ""
+	if m.customFocus == 0 {
+		nameFocus = "●"
+	} else {
+		keyFocus = "●"
 	}
 
-	cursor := "  "
-	if m.cursor == len(m.providers) {
-		cursor = "> "
-	}
-	s += fmt.Sprintf("%s%s\n", cursor,
-		lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render("+ Add custom provider"))
+	nameLabel := theme.Body.Render(nameFocus + " Provider name:")
+	keyLabel := theme.Body.Render(keyFocus + " API key:")
 
-	return s
+	nameStyle := theme.InputBlurred
+	keyStyle := theme.InputBlurred
+	if m.customFocus == 0 {
+		nameStyle = theme.InputFocused
+	} else {
+		keyStyle = theme.InputFocused
+	}
+
+	nameView := nameStyle.Render(m.customName.View())
+	keyView := keyStyle.Render(m.customKey.View())
+
+	body := lipgloss.JoinVertical(lipgloss.Top,
+		title,
+		"",
+		nameLabel,
+		"",
+		nameView,
+		"",
+		keyLabel,
+		"",
+		keyView,
+	)
+
+	baseStyle := lipgloss.NewStyle().
+		Width(m.width).
+		BorderStyle(theme.Border).
+		BorderForeground(theme.BorderColor.GetForeground()).
+		Padding(1, 2)
+
+	return baseStyle.Render(body)
 }
 
 func (m tuiModel) renderKeys() string {
-	s := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).Render("Enter API keys") + "\n"
-	s += lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  Tab to navigate · Enter to confirm\n") + "\n"
+	theme := tui.Current()
 
-	for _, p := range m.customResults {
-		s += fmt.Sprintf("  %s: [set]\n",
-			lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(p.Name))
-	}
+	title := theme.Title.Render("Enter API Keys")
+	subtitle := theme.Dimmed.Render(fmt.Sprintf("Configure %d provider(s)", len(m.keys)))
 
-	for i, f := range m.fields {
+	var rows []string
+	for i, f := range m.keys {
 		prefix := "  "
-		if i == m.fieldCursor {
-			prefix = "> "
+		if i == m.keyCursor {
+			prefix = "●"
 		}
-		s += prefix + lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(f.name) + "\n"
-		s += "    " + f.input.View() + "\n"
+		label := theme.Body.Render(prefix + " " + f.name)
+
+		inputStyle := theme.InputBlurred
+		if i == m.keyCursor {
+			inputStyle = theme.InputFocused
+		}
+		inputView := inputStyle.Render(f.input.View())
+
+		rows = append(rows, label)
+		rows = append(rows, "")
+		rows = append(rows, inputView)
+		if i < len(m.keys)-1 {
+			rows = append(rows, "")
+		}
 	}
 
-	return s
+	for _, cr := range m.customResults {
+		rows = append(rows, "")
+		rows = append(rows, theme.Success.Render("✓ "+cr.Name))
+	}
+
+	body := lipgloss.JoinVertical(lipgloss.Top,
+		title,
+		"",
+		subtitle,
+		"",
+		lipgloss.JoinVertical(lipgloss.Top, rows...),
+	)
+
+	baseStyle := lipgloss.NewStyle().
+		Width(m.width).
+		BorderStyle(theme.Border).
+		BorderForeground(theme.BorderColor.GetForeground()).
+		Padding(1, 2)
+
+	return baseStyle.Render(body)
 }
 
 func (m tuiModel) Results() map[string]string {
 	result := make(map[string]string)
-	for _, f := range m.fields {
+	for _, f := range m.keys {
 		if f.input.Value() != "" {
 			result[f.name] = f.input.Value()
 		}
@@ -348,7 +487,7 @@ func (m tuiModel) Results() map[string]string {
 }
 
 func CollectProviderKeys() (map[string]string, error) {
-	p := tea.NewProgram(newTUIModel())
+	p := tea.NewProgram(newTUIModel(), tea.WithAltScreen())
 	m, err := p.Run()
 	if err != nil {
 		return nil, err
@@ -357,13 +496,4 @@ func CollectProviderKeys() (map[string]string, error) {
 		return model.Results(), nil
 	}
 	return nil, nil
-}
-
-func init() {
-	sort.Slice(BuiltinProviders, func(i, j int) bool {
-		if BuiltinProviders[i].NeedsKey != BuiltinProviders[j].NeedsKey {
-			return BuiltinProviders[i].NeedsKey
-		}
-		return BuiltinProviders[i].Name < BuiltinProviders[j].Name
-	})
 }

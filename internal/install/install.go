@@ -10,6 +10,11 @@ import (
 	"runtime"
 )
 
+// HTTPDoer is the interface for making HTTP requests.
+type HTTPDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
 const (
 	owner   = "gumieri"
 	repo    = "nenya"
@@ -24,6 +29,10 @@ type Config struct {
 }
 
 func Install(ctx context.Context, cfg Config) error {
+	return InstallWithHTTP(ctx, cfg, http.DefaultClient)
+}
+
+func InstallWithHTTP(ctx context.Context, cfg Config, hc HTTPDoer) error {
 	if runtime.GOOS == "windows" {
 		return fmt.Errorf("bare-metal installation is not supported on Windows; use 'nenyactl containers setup' instead")
 	}
@@ -31,7 +40,7 @@ func Install(ctx context.Context, cfg Config) error {
 	version := cfg.Version
 	if version == "" {
 		var err error
-		version, err = FetchLatestVersion(ctx)
+		version, err = FetchLatestVersionWithHTTP(ctx, hc)
 		if err != nil {
 			return fmt.Errorf("fetch latest version: %w", err)
 		}
@@ -45,7 +54,7 @@ func Install(ctx context.Context, cfg Config) error {
 	defer os.RemoveAll(tmpDir)
 
 	archive := filepath.Join(tmpDir, "nenya.tar.gz")
-	if err := download(ctx, url, archive); err != nil {
+	if err := downloadWith(ctx, url, archive, hc); err != nil {
 		return fmt.Errorf("download nenya: %w", err)
 	}
 
@@ -131,7 +140,7 @@ func copyFromExtract(extractDir string, paths map[string]string) error {
 	return nil
 }
 
-func downloadURL(version string) string {
+var downloadURL = func(version string) string {
 	arch := runtime.GOARCH
 	osName := runtime.GOOS
 	return fmt.Sprintf("https://github.com/%s/%s/releases/download/%s/nenya_%s_%s_%s.tar.gz",
@@ -139,11 +148,15 @@ func downloadURL(version string) string {
 }
 
 func download(ctx context.Context, url, dest string) error {
+	return downloadWith(ctx, url, dest, http.DefaultClient)
+}
+
+func downloadWith(ctx context.Context, url, dest string, hc HTTPDoer) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return err
 	}

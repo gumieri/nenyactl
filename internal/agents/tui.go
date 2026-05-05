@@ -8,16 +8,18 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/gumieri/nenyactl/internal/tui"
 )
 
 type screen int
 
 const (
-	screenMode screen = iota
-	screenList
+	screenList screen = iota
 	screenEdit
 	screenPicker
 	screenConfirm
@@ -29,38 +31,58 @@ type Agent struct {
 	Models   []string
 }
 
-type model struct {
+type modelState struct {
 	ID       string
 	Provider string
 	Selected bool
 }
 
 type tuiModel struct {
-	screen       screen
-	modeAuto     bool
-	agents       []Agent
-	cursor       int
-	fieldCursor  int
-	nameInput    textinput.Model
-	strategyIdx  int
-	models       []model
-	filter       string
-	filterInput  textinput.Model
-	deleteIdx    int
-	quitConfirm  bool
-	done         bool
+	screen    screen
+	modeAuto  bool
+	agents    []Agent
+	cursor    int
+
+	editName   textinput.Model
+	strategyIdx int
+	editCursor int
+
+	models    []modelState
+	modelCursor int
+	modelFilter textinput.Model
+
+	deleteIdx int
+
+	agentsView viewport.Model
+	pickerView viewport.Model
+	width, height int
+	helpModel help.Model
+	helpKM    tui.KeyMap
+
+	done bool
 }
 
 func newTUIModel() tuiModel {
 	m := tuiModel{
-		modeAuto: true,
-		agents:   nil,
-		cursor:   0,
+		modeAuto:    true,
+		agents:      nil,
+		cursor:      0,
+		editName:    textinput.New(),
+		modelFilter: textinput.New(),
+		agentsView:  viewport.New(0, 0),
+		pickerView:  viewport.New(0, 0),
+		helpModel:   tui.NewHelpModel(),
+		helpKM:      tui.ListKeyMap,
 	}
-	m.filterInput = textinput.New()
-	m.filterInput.Placeholder = "Filter models..."
-	m.filterInput.CharLimit = 50
-	m.filterInput.Width = 40
+
+	m.editName.Placeholder = "agent-name"
+	m.editName.CharLimit = 64
+	m.editName.Width = 40
+
+	m.modelFilter.Placeholder = "Filter models..."
+	m.modelFilter.CharLimit = 50
+	m.modelFilter.Width = 40
+
 	return m
 }
 
@@ -69,11 +91,22 @@ func (m tuiModel) Init() tea.Cmd {
 }
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		h := msg.Height - 6
+		if h < 8 {
+			h = 8
+		}
+		m.agentsView.Width = msg.Width - 6
+		m.agentsView.Height = h
+		m.pickerView.Width = msg.Width - 6
+		m.pickerView.Height = h
+
 	case tea.KeyMsg:
 		switch m.screen {
-		case screenMode:
-			return m.updateMode(msg)
 		case screenList:
 			return m.updateList(msg)
 		case screenEdit:
@@ -84,38 +117,25 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateConfirm(msg)
 		}
 	}
-	return m, nil
-}
 
-func (m *tuiModel) updateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+c", "esc":
-		m.done = true
-		return m, tea.Quit
-	case "enter":
-		if m.modeAuto {
-			m.done = true
-			return m, tea.Quit
+	if m.screen == screenEdit {
+		m.editName, _ = m.editName.Update(msg)
+	} else if m.screen == screenPicker {
+		m.modelFilter, _ = m.modelFilter.Update(msg)
+		if m.modelFilter.Focused() {
+			m.loadModels()
 		}
-		m.screen = screenList
-		m.loadDefaults()
-		return m, nil
-	case " ":
-		m.modeAuto = !m.modeAuto
-		return m, nil
-	case "up", "k":
-		m.cursor = 0
-		return m, nil
-	case "down", "j":
-		m.cursor = 1
-		return m, nil
 	}
-	return m, nil
+
+	return m, cmd
 }
 
 func (m *tuiModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+c", "esc":
+	case "ctrl+c", "q":
+		m.done = true
+		return m, tea.Quit
+	case "esc":
 		m.done = true
 		return m, tea.Quit
 	case "enter":
@@ -125,21 +145,33 @@ func (m *tuiModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.startNew()
 		}
 		return m, nil
+	case " ":
+		if m.cursor == 0 {
+			m.modeAuto = !m.modeAuto
+			if m.modeAuto {
+				m.done = true
+				return m, tea.Quit
+			}
+			m.loadDefaults()
+		}
+		return m, nil
 	case "d":
-		if m.cursor < len(m.agents) {
+		if m.cursor > 0 && m.cursor-1 < len(m.agents) {
 			m.screen = screenConfirm
-			m.deleteIdx = m.cursor
-			m.quitConfirm = false
+			m.deleteIdx = m.cursor - 1
 		}
 		return m, nil
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
+			m.scrollAgents()
 		}
 		return m, nil
 	case "down", "j":
-		if m.cursor < len(m.agents) {
+		total := len(m.agents) + 1
+		if m.cursor < total-1 {
 			m.cursor++
+			m.scrollAgents()
 		}
 		return m, nil
 	case "a":
@@ -153,48 +185,53 @@ func (m *tuiModel) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "esc":
 		m.screen = screenList
+		m.removeEmptyAgent()
+		m.scrollAgents()
 		return m, nil
 	case "enter":
-		if m.fieldCursor == 0 {
-			m.fieldCursor = 1
+		if m.editCursor == 0 {
+			m.editCursor = 1
 			return m, nil
-		} else if m.fieldCursor == 1 {
-			m.fieldCursor = 2
+		} else if m.editCursor == 1 {
+			m.editCursor = 2
 			return m, nil
 		} else {
 			m.screen = screenPicker
-			m.filter = ""
-			m.filterInput.Reset()
+			m.modelFilter.Reset()
+			m.modelCursor = 0
 			m.loadModels()
-			return m, m.filterInput.Focus()
+			m.pickerView.GotoTop()
+			return m, nil
 		}
 	case "tab":
-		m.fieldCursor = (m.fieldCursor + 1) % 3
-		if m.fieldCursor == 2 {
-			return m, nil
-		}
+		m.editCursor = (m.editCursor + 1) % 3
 		return m, nil
 	case "shift+tab":
-		m.fieldCursor = (m.fieldCursor - 1 + 3) % 3
-		if m.fieldCursor == 2 {
-			return m, nil
+		m.editCursor = (m.editCursor - 1 + 3) % 3
+		return m, nil
+	case "up", "k":
+		if m.editCursor == 1 {
+			if m.strategyIdx > 0 {
+				m.strategyIdx--
+				m.agents[m.cursor].Strategy = Strategies[m.strategyIdx]
+			}
 		}
 		return m, nil
-	case "up", "down":
-		if m.fieldCursor == 1 {
-			if msg.String() == "up" && m.strategyIdx > 0 {
-				m.strategyIdx--
-			}
-			if msg.String() == "down" && m.strategyIdx < len(Strategies)-1 {
+	case "down", "j":
+		if m.editCursor == 1 {
+			if m.strategyIdx < len(Strategies)-1 {
 				m.strategyIdx++
+				m.agents[m.cursor].Strategy = Strategies[m.strategyIdx]
 			}
 		}
 		return m, nil
 	}
 
-	var cmd tea.Cmd
-	m.nameInput, cmd = m.nameInput.Update(msg)
-	return m, cmd
+	m.editName, _ = m.editName.Update(msg)
+	if m.editName.Value() != "" && m.cursor < len(m.agents) {
+		m.agents[m.cursor].Name = m.editName.Value()
+	}
+	return m, nil
 }
 
 func (m *tuiModel) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -203,47 +240,32 @@ func (m *tuiModel) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.screen = screenEdit
 		return m, nil
 	case "enter":
-		if m.filter != "" {
-			customModel := strings.TrimSpace(m.filter)
-			if customModel != "" {
-				m.agents[m.cursor].Models = append(m.agents[m.cursor].Models, customModel)
-			}
-		}
 		m.screen = screenEdit
 		return m, nil
 	case " ":
-		if m.cursor < len(m.models) {
-			m.models[m.cursor].Selected = !m.models[m.cursor].Selected
+		if m.modelCursor < len(m.models) {
+			m.models[m.modelCursor].Selected = !m.models[m.modelCursor].Selected
+			m.syncAgentModels()
+			m.updatePickerContent()
 		}
 		return m, nil
 	case "up", "k":
-		if m.cursor > 0 {
-			m.cursor--
+		if m.modelCursor > 0 {
+			m.modelCursor--
+			m.scrollPicker()
 		}
 		return m, nil
 	case "down", "j":
-		if m.cursor < len(m.models) {
-			m.cursor++
+		if m.modelCursor < len(m.models)-1 {
+			m.modelCursor++
+			m.scrollPicker()
 		}
 		return m, nil
-	case "backspace":
-		if m.filter != "" {
-			m.filter = m.filter[:len(m.filter)-1]
-			m.filterInput.Reset()
-			m.filterInput.SetValue(m.filter)
-			m.loadModels()
-		}
+	case "/":
+		m.modelFilter.Focus()
 		return m, nil
 	}
-
-	m.filterInput, _ = m.filterInput.Update(msg)
-	if m.filter != m.filterInput.Value() {
-		m.filter = m.filterInput.Value()
-		m.loadModels()
-	}
-
-	var cmd tea.Cmd
-	return m, cmd
+	return m, nil
 }
 
 func (m *tuiModel) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -254,10 +276,13 @@ func (m *tuiModel) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.screen = screenList
 		m.deleteIdx = -1
+		m.cursor = 0
+		m.scrollAgents()
 		return m, nil
 	case "n", "esc":
 		m.screen = screenList
 		m.deleteIdx = -1
+		m.scrollAgents()
 		return m, nil
 	}
 	return m, nil
@@ -272,18 +297,18 @@ func (m *tuiModel) loadDefaults() {
 			Models:   append([]string{}, def.Models...),
 		})
 	}
+	sort.Slice(m.agents, func(i, j int) bool {
+		return m.agents[i].Name < m.agents[j].Name
+	})
 	m.cursor = 0
+	m.scrollAgents()
 }
 
 func (m *tuiModel) startEdit(idx int) {
 	m.screen = screenEdit
 	m.cursor = idx
-	m.nameInput = textinput.New()
-	m.nameInput.Placeholder = "agent-name"
-	m.nameInput.CharLimit = 64
-	m.nameInput.Width = 40
-	m.nameInput.SetValue(m.agents[idx].Name)
-	m.nameInput.Focus()
+	m.editName.SetValue(m.agents[idx].Name)
+	m.editName.Focus()
 
 	for i, s := range Strategies {
 		if m.agents[idx].Strategy == s {
@@ -291,32 +316,38 @@ func (m *tuiModel) startEdit(idx int) {
 			break
 		}
 	}
-	m.fieldCursor = 0
+	m.editCursor = 0
 }
 
 func (m *tuiModel) startNew() {
 	m.screen = screenEdit
 	m.cursor = len(m.agents)
 	m.agents = append(m.agents, Agent{Name: "new-agent", Strategy: "fallback", Models: nil})
-	m.nameInput = textinput.New()
-	m.nameInput.Placeholder = "agent-name"
-	m.nameInput.CharLimit = 64
-	m.nameInput.Width = 40
-	m.nameInput.SetValue("new-agent")
-	m.nameInput.Focus()
+	m.editName.SetValue("new-agent")
+	m.editName.Focus()
 	m.strategyIdx = 0
-	m.fieldCursor = 0
+	m.editCursor = 0
+}
+
+func (m *tuiModel) removeEmptyAgent() {
+	if m.cursor < len(m.agents) && m.agents[m.cursor].Name == "new-agent" {
+		m.agents = append(m.agents[:m.cursor], m.agents[m.cursor+1:]...)
+	}
+	if m.cursor >= len(m.agents) && m.cursor > 0 {
+		m.cursor--
+	}
 }
 
 func (m *tuiModel) loadModels() {
+	filter := strings.ToLower(m.modelFilter.Value())
 	m.models = nil
 	for _, def := range Models {
 		name := def.ID
-		if m.filter != "" && !strings.Contains(strings.ToLower(name), strings.ToLower(m.filter)) {
+		if filter != "" && !strings.Contains(strings.ToLower(name), filter) {
 			continue
 		}
 		sel := false
-		if m.screen == screenPicker && m.cursor < len(m.agents) {
+		if m.cursor < len(m.agents) {
 			for _, mdl := range m.agents[m.cursor].Models {
 				if mdl == name || mdl == def.Provider+"/"+name {
 					sel = true
@@ -324,198 +355,380 @@ func (m *tuiModel) loadModels() {
 				}
 			}
 		}
-		m.models = append(m.models, model{ID: name, Provider: def.Provider, Selected: sel})
+		m.models = append(m.models, modelState{ID: name, Provider: def.Provider, Selected: sel})
 	}
-	m.cursor = 0
+	m.modelCursor = 0
+	m.pickerView.GotoTop()
+	m.updatePickerContent()
+}
+
+func (m *tuiModel) syncAgentModels() {
+	if m.cursor >= len(m.agents) {
+		return
+	}
+	var selected []string
+	for _, mod := range m.models {
+		if mod.Selected {
+			selected = append(selected, mod.ID)
+		}
+	}
+	m.agents[m.cursor].Models = selected
+}
+
+func (m *tuiModel) scrollAgents() {
+	total := len(m.agents) + 1
+	visible := m.agentsView.Height
+	if visible <= 0 {
+		return
+	}
+	half := visible / 2
+	if m.cursor < half {
+		m.agentsView.YOffset = 0
+	} else if m.cursor > total-1-half {
+		m.agentsView.YOffset = total - visible
+		if m.agentsView.YOffset < 0 {
+			m.agentsView.YOffset = 0
+		}
+	} else {
+		m.agentsView.YOffset = m.cursor - half
+	}
+	m.updateAgentContent()
+}
+
+func (m *tuiModel) scrollPicker() {
+	visible := m.pickerView.Height
+	if visible <= 0 {
+		return
+	}
+	half := visible / 2
+	if m.modelCursor < half {
+		m.pickerView.YOffset = 0
+	} else if m.modelCursor > len(m.models)-1-half {
+		m.pickerView.YOffset = len(m.models) - visible
+		if m.pickerView.YOffset < 0 {
+			m.pickerView.YOffset = 0
+		}
+	} else {
+		m.pickerView.YOffset = m.modelCursor - half
+	}
+	m.updatePickerContent()
+}
+
+func (m *tuiModel) updateAgentContent() {
+	content := m.renderAgentList()
+	m.agentsView.SetContent(content)
+}
+
+func (m *tuiModel) updatePickerContent() {
+	content := m.renderPickerList()
+	m.pickerView.SetContent(content)
 }
 
 func (m tuiModel) View() string {
+	theme := tui.Current()
+
 	if m.done {
 		return ""
 	}
 
+	var content string
 	switch m.screen {
-	case screenMode:
-		return m.viewMode()
 	case screenList:
-		return m.viewList()
+		content = m.viewList()
 	case screenEdit:
-		return m.viewEdit()
+		content = m.viewEdit()
 	case screenPicker:
-		return m.viewPicker()
+		content = m.viewPicker()
 	case screenConfirm:
-		return m.viewConfirm()
+		content = m.viewConfirm()
 	}
-	return ""
+
+	helpView := m.helpModel.View(m.helpKM)
+
+	out := lipgloss.JoinVertical(lipgloss.Top,
+		content,
+		"",
+		helpView,
+	)
+
+	return theme.App.Render(out)
 }
 
-func (m tuiModel) viewMode() string {
-	s := header("Configure Agents") + "\n"
-	s += dim("How would you like to configure agents?\n\n")
-
-	cursor := "  "
-	autoSel := "[ ]"
-	manualSel := "[ ]"
-	if m.cursor == 0 {
-		cursor = "> "
-		autoSel = "[x]"
-	}
-	if m.cursor == 1 {
-		cursor = "  "
-		manualSel = "[x]"
-	}
-	if m.modeAuto {
-		autoSel = "[x]"
-		cursor = "  "
-	} else {
-		manualSel = "[x]"
-	}
-
-	s += fmt.Sprintf("%s%s Enable auto-agents (recommended)\n", cursor, autoSel)
-	s += dim("    auto_fast, auto_reasoning, auto_vision, auto_coding, auto_large, auto_balanced\n")
-	if !m.modeAuto {
-		s += "\n"
-		s += fmt.Sprintf("  %s Configure manually (defaults: small, build, plan)\n", manualSel)
-	}
-
-	s += "\n" + dim("↑/↓ Navigate · Space toggle · Enter confirm")
-	return s
-}
-
+// viewList renders the list screen.
+// Content is refreshed by scrollAgents() which is called on cursor
+// movement, toggle, deletion, and when returning from the edit screen.
 func (m tuiModel) viewList() string {
-	s := header("Configure Agents") + "\n"
-	s += dim("Agents: use ↑/↓ to select · Enter to edit · d to delete · a to add new\n\n")
+	theme := tui.Current()
+
+	autoLabel := "OFF"
+	autoStyle := theme.Error
+	if m.modeAuto {
+		autoLabel = "ON"
+		autoStyle = theme.Success
+	}
+
+	title := theme.Title.Render("Configure Agents")
+	autoLine := fmt.Sprintf("Auto-agents: %s  (%s)",
+		autoStyle.Bold(true).Render(autoLabel),
+		theme.Dimmed.Render("Space to toggle, Enter to configure manually"),
+	)
+
+	body := lipgloss.JoinVertical(lipgloss.Top,
+		title,
+		"",
+		autoLine,
+		"",
+		m.agentsView.View(),
+	)
+
+	baseStyle := lipgloss.NewStyle().
+		Width(m.width).
+		BorderStyle(theme.Border).
+		BorderForeground(theme.BorderColor.GetForeground()).
+		Padding(1, 2)
+
+	return baseStyle.Render(body)
+}
+
+func (m tuiModel) renderAgentList() string {
+	theme := tui.Current()
+	var lines []string
 
 	for i, a := range m.agents {
-		cursor := "  "
-		if i == m.cursor {
-			cursor = "> "
+		prefix := "  "
+		style := theme.Body
+		idx := i + 1
+		if idx == m.cursor {
+			prefix = "● "
+			style = theme.Highlight
+		} else {
+			prefix = "  "
 		}
+
 		modelsStr := strings.Join(a.Models, ", ")
 		if modelsStr == "" {
-			modelsStr = dim("(no models)")
+			modelsStr = "(no models)"
 		}
-		s += fmt.Sprintf("%s%s  %s  [%s]\n    %s\n",
-			cursor,
-			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10")).Render(a.Name),
-			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(a.Strategy),
-			modelsStr,
-			dim(fmt.Sprintf("%d models", len(a.Models))),
+
+		nameStyle := theme.Accent
+		if idx == m.cursor {
+			nameStyle = nameStyle.Background(theme.Highlight.GetBackground())
+		}
+
+		name := nameStyle.Bold(true).Render(a.Name)
+		strategy := theme.Dimmed.Render(a.Strategy)
+		modelsLine := theme.Dimmed.Render(fmt.Sprintf("  %d models: %s", len(a.Models), trunc(modelsStr, 50)))
+
+		line := fmt.Sprintf("%s%s  %s\n    %s",
+			style.Render(prefix),
+			name,
+			strategy,
+			modelsLine,
 		)
+		lines = append(lines, line)
 	}
 
-	cursor := "  "
+	addPrefix := "  "
 	if m.cursor == len(m.agents) {
-		cursor = "> "
+		addPrefix = "● "
 	}
-	s += fmt.Sprintf("%s%s\n", cursor, lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render("+ Add new agent"))
+	addLabel := theme.Accent.Render(addPrefix + "+ Add new agent")
+	lines = append(lines, addLabel)
 
-	s += "\n" + dim("Esc to go back · Ctrl+C to exit and save")
-	return s
+	return strings.Join(lines, "\n")
 }
 
 func (m tuiModel) viewEdit() string {
-	s := header(fmt.Sprintf("Edit Agent (%d/%d)", m.cursor+1, len(m.agents))) + "\n"
-	s += dim("Name, Strategy, Models · Tab to navigate · Esc to go back\n\n")
+	theme := tui.Current()
 
-	nameCursor := ""
-	stratCursor := ""
-	modelCursor := ""
-	if m.fieldCursor == 0 {
-		nameCursor = ">"
-	}
-	if m.fieldCursor == 1 {
-		stratCursor = ">"
-	}
-	if m.fieldCursor == 2 {
-		modelCursor = ">"
+	title := theme.Title.Render(fmt.Sprintf("Edit Agent (%d/%d)", m.cursor+1, len(m.agents)))
+
+	nameLabel := theme.Dimmed.Render("● Name")
+	if m.editCursor == 0 {
+		nameLabel = theme.Cursor.Render("● Name")
 	}
 
-	s += fmt.Sprintf("%s Name: %s\n", nameCursor, m.nameInput.View())
+	nameStyle := theme.InputBlurred
+	if m.editCursor == 0 {
+		nameStyle = theme.InputFocused
+	}
+	nameView := nameStyle.Render(m.editName.View())
 
-	s += fmt.Sprintf("%s Strategy:\n", stratCursor)
-	for _, strat := range Strategies {
-		sel := "  "
-		if strat == Strategies[m.strategyIdx] {
-			sel = "→ "
+	stratLabel := theme.Dimmed.Render("  Strategy")
+	if m.editCursor == 1 {
+		stratLabel = theme.Cursor.Render("● Strategy")
+	}
+
+	var stratLines []string
+	for i, s := range Strategies {
+		sel := "○ "
+		if i == m.strategyIdx {
+			sel = "● "
 		}
-		s += fmt.Sprintf("    %s%s\n", sel, lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(strat))
-	}
-	if m.fieldCursor == 1 {
-		s += dim("     ↑/↓ to change\n")
+		style := theme.Dimmed
+		if i == m.strategyIdx {
+			style = theme.Accent.Bold(true)
+		}
+		cursor := "  "
+		if m.editCursor == 1 && i == m.strategyIdx {
+			cursor = theme.Cursor.Render("→")
+		}
+		stratLines = append(stratLines, fmt.Sprintf("  %s %s%s", cursor, sel, style.Render(s)))
 	}
 
-	modelsStr := "  (none)"
-	if len(m.agents[m.cursor].Models) > 0 {
+	modelLabel := theme.Dimmed.Render("  Models")
+	if m.editCursor == 2 {
+		modelLabel = theme.Cursor.Render("● Models")
+	}
+
+	modelsStr := "(none)"
+	if m.cursor < len(m.agents) && len(m.agents[m.cursor].Models) > 0 {
 		modelsStr = strings.Join(m.agents[m.cursor].Models, ", ")
 	}
-	s += fmt.Sprintf("%s Models: %s\n    %s%s\n",
-		modelCursor,
-		dim("Enter to select models"),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(trunc(modelsStr, 60)),
-		dim(fmt.Sprintf(" [%d]", len(m.agents[m.cursor].Models))),
+	modelLine := theme.Accent.Bold(true).Render(fmt.Sprintf("[%d selected]", len(m.agents[m.cursor].Models)))
+
+	body := lipgloss.JoinVertical(lipgloss.Top,
+		title,
+		"",
+		nameLabel,
+		"",
+		nameView,
+		"",
+		stratLabel,
+		strings.Join(stratLines, "\n"),
+		"",
+		modelLabel,
+		"",
+		fmt.Sprintf("  %s %s", modelLine, theme.Dimmed.Render(trunc(modelsStr, 50))),
 	)
 
-	s += "\n" + dim("Enter to confirm name/strategy · Esc to go back")
-	return s
+	baseStyle := lipgloss.NewStyle().
+		Width(m.width).
+		BorderStyle(theme.Border).
+		BorderForeground(theme.BorderColor.GetForeground()).
+		Padding(1, 2)
+
+	return baseStyle.Render(body)
 }
 
 func (m tuiModel) viewPicker() string {
-	s := header("Select Models") + "\n"
-	s += dim("Space to toggle · Type to filter · Enter to finish · Esc to go back\n\n")
+	theme := tui.Current()
 
-	if len(m.agents) > m.cursor {
-		s += fmt.Sprintf("%s: %s\n\n",
-			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).Render(m.agents[m.cursor].Name),
-			dim("selected: "+strings.Join(m.agents[m.cursor].Models, ", ")),
-		)
+	name := ""
+	if m.cursor < len(m.agents) {
+		name = m.agents[m.cursor].Name
 	}
 
-	s += m.filterInput.View() + "\n\n"
+	title := theme.Title.Render(fmt.Sprintf("Select Models: %s", name))
+	subtitle := theme.Dimmed.Render("Space to toggle · / to filter · Enter to finish · Esc to go back")
+	selectedStr := ""
+	if m.cursor < len(m.agents) {
+		selectedStr = theme.Dimmed.Render(fmt.Sprintf("selected: %d", len(m.agents[m.cursor].Models)))
+	}
 
-	shown := 0
-	for _, mod := range m.models {
-		if shown >= 30 {
-			s += dim("  ... (more models, type to filter)\n")
-			break
-		}
-		cursor := "  "
-		if m.cursor == shown {
-			cursor = "> "
+	filterView := m.modelFilter.View()
+	if m.modelFilter.Focused() {
+		filterView = theme.InputFocused.Render(filterView)
+	} else {
+		filterView = theme.InputBlurred.Render(filterView)
+	}
+
+	body := lipgloss.JoinVertical(lipgloss.Top,
+		title,
+		"",
+		subtitle,
+		"",
+		selectedStr,
+		"",
+		filterView,
+		"",
+		m.pickerView.View(),
+	)
+
+	baseStyle := lipgloss.NewStyle().
+		Width(m.width).
+		BorderStyle(theme.Border).
+		BorderForeground(theme.BorderColor.GetForeground()).
+		Padding(1, 2)
+
+	return baseStyle.Render(body)
+}
+
+// viewPicker renders the model picker screen.
+// Viewport content is refreshed by scrollPicker() on cursor movement and
+// by updatePicker() on filter changes.
+
+func (m tuiModel) renderPickerList() string {
+	theme := tui.Current()
+	var lines []string
+
+	for i, mod := range m.models {
+		prefix := "  "
+		if i == m.modelCursor {
+			prefix = "● "
 		}
 		sel := " "
 		if mod.Selected {
-			sel = "x"
+			sel = "✓"
 		}
-		s += fmt.Sprintf("%s[%s] %s  %s\n",
-			cursor,
-			lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(sel),
-			lipgloss.NewStyle().Bold(true).Render(mod.ID),
-			dim(mod.Provider),
+		selStyle := theme.Unchecked
+		if mod.Selected {
+			selStyle = theme.Checked
+		}
+
+		modelStyle := theme.Body
+		if i == m.modelCursor {
+			modelStyle = theme.Highlight
+		}
+
+		name := theme.Accent.Render(mod.ID)
+		provider := theme.Dimmed.Render(mod.Provider)
+
+		line := fmt.Sprintf("%s[%s] %s  %s",
+			selStyle.Render(prefix),
+			selStyle.Render(sel),
+			modelStyle.Render(name),
+			provider,
 		)
-		shown++
+		lines = append(lines, line)
 	}
 
-	return s
+	return strings.Join(lines, "\n")
 }
 
 func (m tuiModel) viewConfirm() string {
+	theme := tui.Current()
+
 	name := ""
 	if m.deleteIdx >= 0 && m.deleteIdx < len(m.agents) {
 		name = m.agents[m.deleteIdx].Name
 	}
-	s := header("Delete Agent") + "\n\n"
-	s += fmt.Sprintf("Delete '%s'? [y/N]\n", lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")).Render(name))
-	s += "\n" + dim("y or Enter to confirm · n or Esc to cancel")
-	return s
-}
 
-func header(s string) string {
-	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).Render(s)
-}
+	title := theme.Title.Render("Delete Agent")
+	prompt := fmt.Sprintf("Delete '%s'?", theme.Error.Bold(true).Render(name))
+	confirm := theme.Dimmed.Render("y or Enter to confirm · n or Esc to cancel")
 
-func dim(s string) string {
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(s)
+	body := lipgloss.JoinVertical(lipgloss.Top,
+		title,
+		"",
+		prompt,
+		"",
+		confirm,
+	)
+
+	modalStyle := lipgloss.NewStyle().
+		Border(theme.Border).
+		BorderForeground(theme.Error.GetForeground()).
+		Padding(1, 2).
+		Width(40)
+
+	modal := modalStyle.Render(body)
+
+	baseStyle := lipgloss.NewStyle().
+		Width(m.width).
+		Padding(4, 2)
+
+	return baseStyle.Render(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal))
 }
 
 func trunc(s string, max int) string {
@@ -526,7 +739,7 @@ func trunc(s string, max int) string {
 }
 
 func RunAgentEditor() (bool, map[string]any, error) {
-	p := tea.NewProgram(newTUIModel())
+	p := tea.NewProgram(newTUIModel(), tea.WithAltScreen())
 	m, err := p.Run()
 	if err != nil {
 		return false, nil, err

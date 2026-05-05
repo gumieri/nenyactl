@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -13,6 +14,50 @@ import (
 	"github.com/gumieri/nenyactl/internal/secrets"
 	"github.com/spf13/cobra"
 )
+
+// execer is the interface for running external commands.
+type execer interface {
+	Command(name string, args ...string) cmdRunner
+}
+
+// cmdRunner is the interface for a command that can be run.
+type cmdRunner interface {
+	Dir(string) cmdRunner
+	Stdout(io.Writer) cmdRunner
+	Stderr(io.Writer) cmdRunner
+	Run() error
+}
+
+// realCmd wraps exec.Cmd to implement cmdRunner.
+type realCmd struct{ *exec.Cmd }
+
+func (r realCmd) Dir(dir string) cmdRunner {
+	r.Cmd.Dir = dir
+	return r
+}
+
+func (r realCmd) Stdout(w io.Writer) cmdRunner {
+	r.Cmd.Stdout = w
+	return r
+}
+
+func (r realCmd) Stderr(w io.Writer) cmdRunner {
+	r.Cmd.Stderr = w
+	return r
+}
+
+func (r realCmd) Run() error {
+	return r.Cmd.Run()
+}
+
+// realExec implements execer using os/exec.
+type realExec struct{}
+
+func (realExec) Command(name string, args ...string) cmdRunner {
+	return realCmd{Cmd: exec.Command(name, args...)}
+}
+
+var defaultExec execer = realExec{}
 
 var containerCmd = &cobra.Command{
 	Use:   "containers",
@@ -62,7 +107,10 @@ func containerDefaultDir() string {
 }
 
 func runContainerSetup(cmd *cobra.Command, args []string) error {
-	dir := containerSetupCfg.dir
+	return runContainerSetupWithExec(defaultExec, containerSetupCfg.dir, containerSetupCfg.listenAddr, containerSetupCfg.start)
+}
+
+func runContainerSetupWithExec(ex execer, dir, listenAddr string, startAfter bool) error {
 	if dir == "" {
 		d, err := ctpaths.ContainerDir()
 		if err != nil {
@@ -74,7 +122,7 @@ func runContainerSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println(infoStyle.Render("›"), "Setting up Nenya in:", dir)
 
 	if err := containers.Setup(containers.SetupConfig{
-		ListenAddr: containerSetupCfg.listenAddr,
+		ListenAddr: listenAddr,
 		Dir:        dir,
 	}); err != nil {
 		return fmt.Errorf("setup: %w", err)
@@ -114,8 +162,8 @@ func runContainerSetup(cmd *cobra.Command, args []string) error {
 		fmt.Println(successStyle.Render("✓"), "Saved", len(keys), "provider keys")
 	}
 
-	if containerSetupCfg.start {
-		return runContainerStart(cmd, []string{})
+	if startAfter {
+		return runContainerStartWithExec(ex, dir)
 	}
 
 	fmt.Println()
@@ -139,7 +187,10 @@ func init() {
 }
 
 func runContainerStart(cmd *cobra.Command, args []string) error {
-	dir := containerSetupCfg.dir
+	return runContainerStartWithExec(defaultExec, containerSetupCfg.dir)
+}
+
+func runContainerStartWithExec(ex execer, dir string) error {
 	if dir == "" {
 		d, err := ctpaths.ContainerDir()
 		if err != nil {
@@ -153,10 +204,7 @@ func runContainerStart(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("%s Running: %s compose %v\n", infoStyle.Render("›"), runtime, composeArgs)
 
-	c := exec.Command(string(runtime), composeArgs...)
-	c.Dir = dir
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
+	c := ex.Command(string(runtime), composeArgs...).Dir(dir).Stdout(os.Stdout).Stderr(os.Stderr)
 	return c.Run()
 }
 
@@ -173,7 +221,10 @@ func init() {
 }
 
 func runContainerStop(cmd *cobra.Command, _ []string) error {
-	dir := containerSetupCfg.dir
+	return runContainerStopWithExec(defaultExec, containerSetupCfg.dir)
+}
+
+func runContainerStopWithExec(ex execer, dir string) error {
 	if dir == "" {
 		d, err := ctpaths.ContainerDir()
 		if err != nil {
@@ -187,10 +238,7 @@ func runContainerStop(cmd *cobra.Command, _ []string) error {
 
 	fmt.Printf("%s Running: %s compose %v\n", infoStyle.Render("›"), runtime, composeArgs)
 
-	c := exec.Command(string(runtime), composeArgs...)
-	c.Dir = dir
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
+	c := ex.Command(string(runtime), composeArgs...).Dir(dir).Stdout(os.Stdout).Stderr(os.Stderr)
 	return c.Run()
 }
 
@@ -207,7 +255,10 @@ func init() {
 }
 
 func runContainerStatus(cmd *cobra.Command, _ []string) error {
-	dir := containerSetupCfg.dir
+	return runContainerStatusWithExec(defaultExec, containerSetupCfg.dir)
+}
+
+func runContainerStatusWithExec(ex execer, dir string) error {
 	if dir == "" {
 		d, err := ctpaths.ContainerDir()
 		if err != nil {
@@ -220,10 +271,7 @@ func runContainerStatus(cmd *cobra.Command, _ []string) error {
 	composeArgs = append(composeArgs, "ps")
 
 	fmt.Printf("%s Running: %s compose %v\n", infoStyle.Render("›"), runtime, composeArgs)
-	c := exec.Command(string(runtime), composeArgs...)
-	c.Dir = dir
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
+	c := ex.Command(string(runtime), composeArgs...).Dir(dir).Stdout(os.Stdout).Stderr(os.Stderr)
 	if err := c.Run(); err != nil {
 		return err
 	}

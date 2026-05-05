@@ -1,7 +1,6 @@
 package install
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,14 +12,18 @@ type Release struct {
 }
 
 func FetchLatestVersion(ctx context.Context) (string, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", owner, repo)
+	return FetchLatestVersionWithHTTP(ctx, http.DefaultClient)
+}
+
+func FetchLatestVersionWithHTTP(ctx context.Context, hc HTTPDoer) (string, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/releases/latest", githubAPIURL, owner, repo)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -42,4 +45,6 @@ func CheckLatestVersion(ctx context.Context) (string, error) {
 	return FetchLatestVersion(ctx)
 }
 
-var buf bytes.Buffer
+var (
+	githubAPIURL = "https://api.github.com"
+)

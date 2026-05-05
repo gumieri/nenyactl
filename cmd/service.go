@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"fmt"
-	"os/exec"
+	"io"
 	"runtime"
 	"strings"
 
@@ -48,44 +48,57 @@ func init() {
 }
 
 func runServiceStart(cmd *cobra.Command, args []string) error {
+	return runServiceStartWithExec(defaultExec)
+}
+
+func runServiceStartWithExec(ex execer) error {
 	switch runtime.GOOS {
 	case "linux":
-		return systemctl("start", "nenya")
+		return systemctlWithExec(ex, "start", "nenya")
 	case "darwin":
-		return launchctl("load", "/Library/LaunchDaemons/com.gumieri.nenya.plist")
+		return launchctlWithExec(ex, "load", "/Library/LaunchDaemons/com.gumieri.nenya.plist")
 	default:
 		return fmt.Errorf("service management not supported on %s; use 'nenyactl containers setup' instead", runtime.GOOS)
 	}
 }
 
 func runServiceStop(cmd *cobra.Command, args []string) error {
+	return runServiceStopWithExec(defaultExec)
+}
+
+func runServiceStopWithExec(ex execer) error {
 	switch runtime.GOOS {
 	case "linux":
-		return systemctl("stop", "nenya")
+		return systemctlWithExec(ex, "stop", "nenya")
 	case "darwin":
-		return launchctl("unload", "/Library/LaunchDaemons/com.gumieri.nenya.plist")
+		return launchctlWithExec(ex, "unload", "/Library/LaunchDaemons/com.gumieri.nenya.plist")
 	default:
 		return fmt.Errorf("service management not supported on %s; use 'nenyactl containers setup' instead", runtime.GOOS)
 	}
 }
 
 func runServiceStatus(cmd *cobra.Command, args []string) error {
+	return runServiceStatusWithExec(defaultExec)
+}
+
+func runServiceStatusWithExec(ex execer) error {
 	switch runtime.GOOS {
 	case "linux":
-		return systemctl("status", "nenya")
+		return systemctlWithExec(ex, "status", "nenya")
 	case "darwin":
-		return showLaunchdStatus()
+		return showLaunchdStatusWithExec(ex)
 	default:
 		return fmt.Errorf("service management not supported on %s; use 'nenyactl containers setup' instead", runtime.GOOS)
 	}
 }
 
-func showLaunchdStatus() error {
-	out, err := exec.Command("launchctl", "list").Output()
-	if err != nil {
+func showLaunchdStatusWithExec(ex execer) error {
+	var buf strings.Builder
+	c := ex.Command("launchctl", "list").Stdout(&buf).Stderr(io.Discard)
+	if err := c.Run(); err != nil {
 		return fmt.Errorf("launchctl list: %w", err)
 	}
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(buf.String(), "\n") {
 		if strings.Contains(line, "com.gumieri.nenya") {
 			fmt.Println(line)
 			return nil
@@ -95,37 +108,47 @@ func showLaunchdStatus() error {
 }
 
 func runServiceReload(cmd *cobra.Command, args []string) error {
+	return runServiceReloadWithExec(defaultExec)
+}
+
+func runServiceReloadWithExec(ex execer) error {
 	switch runtime.GOOS {
 	case "linux":
-		return systemctl("reload", "nenya")
+		return systemctlWithExec(ex, "reload", "nenya")
 	case "darwin":
-		if err := launchctl("unload", "/Library/LaunchDaemons/com.gumieri.nenya.plist"); err != nil {
+		if err := launchctlWithExec(ex, "unload", "/Library/LaunchDaemons/com.gumieri.nenya.plist"); err != nil {
 			return err
 		}
-		return launchctl("load", "/Library/LaunchDaemons/com.gumieri.nenya.plist")
+		return launchctlWithExec(ex, "load", "/Library/LaunchDaemons/com.gumieri.nenya.plist")
 	default:
 		return fmt.Errorf("service management not supported on %s; use 'nenyactl containers setup' instead", runtime.GOOS)
 	}
 }
 
-func systemctl(action, unit string) error {
-	cmd := exec.Command("systemctl", action, unit)
-	cmd.Stdin = nil
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("systemctl %s %s: %w\n%s", action, unit, err, string(out))
+func systemctlWithExec(ex execer, action, unit string) error {
+	var buf strings.Builder
+	c := ex.Command("systemctl", action, unit).Stdout(&buf).Stderr(io.Discard)
+	if err := c.Run(); err != nil {
+		return fmt.Errorf("systemctl %s %s: %w\n%s", action, unit, err, buf.String())
 	}
-	fmt.Print(string(out))
+	fmt.Print(buf.String())
+	return nil
+}
+
+func systemctl(action, unit string) error {
+	return systemctlWithExec(defaultExec, action, unit)
+}
+
+func launchctlWithExec(ex execer, args ...string) error {
+	var buf strings.Builder
+	c := ex.Command("launchctl", args...).Stdout(&buf).Stderr(io.Discard)
+	if err := c.Run(); err != nil {
+		return fmt.Errorf("launchctl %v: %w\n%s", args, err, buf.String())
+	}
+	fmt.Print(buf.String())
 	return nil
 }
 
 func launchctl(args ...string) error {
-	cmd := exec.Command("launchctl", args...)
-	cmd.Stdin = nil
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("launchctl %v: %w\n%s", args, err, string(out))
-	}
-	fmt.Print(string(out))
-	return nil
+	return launchctlWithExec(defaultExec, args...)
 }
