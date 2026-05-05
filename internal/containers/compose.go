@@ -2,7 +2,7 @@ package containers
 
 const ComposeYAML = `services:
   nenya:
-    image: ghcr.io/gumieri/nenya:latest
+    image: ${NENYA_IMAGE:-ghcr.io/gumieri/nenya:latest}
     container_name: nenya
     ports:
       - "{{ .ListenAddr }}:8080"
