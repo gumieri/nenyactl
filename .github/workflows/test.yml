@@ -86,7 +86,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       docker:
-        image: docker:25.0.3-dind
+        image: docker:dind
         options: --privileged
         ports:
           - 2375:2375
@@ -112,16 +112,22 @@ jobs:
 
       - name: Wait for Docker daemon
         run: |
-          for i in $(seq 1 15); do
-            if docker info >/dev/null 2>&1; then
+          for i in $(seq 1 30); do
+            if command docker info >/dev/null 2>&1; then
               echo "Docker daemon ready"
               docker info --format '{{.ServerVersion}}'
               break
             fi
-            echo "Waiting for Docker daemon... ($i/15)"
+            # Fallback: test TCP directly in case docker CLI is podman
+            if timeout 2 bash -c 'echo >/dev/tcp/localhost/2375' 2>/dev/null; then
+              echo "TCP port 2375 ready"
+              break
+            fi
+            echo "Waiting for Docker daemon... ($i/30)"
             sleep 2
           done
-          docker info >/dev/null 2>&1 || { echo "Docker daemon not ready after 30s"; docker info 2>&1 || true; exit 1; }
+          # Verify final state
+          command docker info >/dev/null 2>&1 || timeout 2 bash -c 'echo >/dev/tcp/localhost/2375' 2>/dev/null || { echo "Docker daemon not ready after 60s"; exit 1; }
 
       - name: Log Docker status
         run: |
