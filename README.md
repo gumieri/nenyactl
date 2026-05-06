@@ -1,22 +1,17 @@
 # nenyactl
 
-Command-line tool to install and manage Nenya AI Gateway using containers (Podman/Docker).
+Command-line tool to install and manage Nenya AI Gateway.
 
 ## Features
 
-- Container-based deployment for all platforms (Linux, macOS, Windows)
 - Interactive TUI for setting provider API keys
 - Automatic configuration and secrets generation
 - Supports both Podman and Docker (auto-detected)
 - Cross-platform path resolution (XDG on Linux, Library folders on macOS, AppData on Windows)
+- Bare metal install on Linux and macOS with package manager or binary from GitHub.
+- Or Container-based deployment for all platforms (Linux, macOS, Windows)
 
 ## Installation
-
-### Homebrew (macOS / Linux)
-
-```bash
-brew install gumieri/tap/nenyactl
-```
 
 ### mise (all platforms)
 
@@ -60,17 +55,17 @@ sudo dpkg -i nenyactl.deb
 sudo dnf install https://github.com/gumieri/nenyactl/releases/latest/download/nenyactl_linux_amd64.rpm
 ```
 
+### Homebrew (macOS / Linux)
+
+```bash
+brew install gumieri/tap/nenyactl
+```
+
 ### From Source
 
 ```bash
 go build -o nenyactl ./cmd/nenyactl/
 install -m 755 nenyactl /usr/local/bin/
-```
-
-Or use the local mise tasks (requires cloning the repo):
-
-```bash
-mise install
 ```
 
 ## Quick Start
@@ -90,11 +85,12 @@ nenyactl service status
 ```
 
 The `install` command:
-- Downloads the latest Nenya binary from GitHub releases
-- Installs it to `/usr/local/bin/nenya`
-- **Linux**: Creates systemd units (`nenya.service` + `nenya.socket`) in `/etc/systemd/system/`
-- **macOS**: Creates a launchd plist in `/Library/LaunchDaemons/com.gumieri.nenya.plist`
-- **Windows**: Not supported — use `nenyactl containers setup` instead
+- Install the package with your System Package Manager
+- Or Downloads the latest Nenya binary from GitHub releases
+  - Installs it to `/usr/local/bin/nenya`
+  - **Linux**: Creates systemd units (`nenya.service` + `nenya.socket`) in `/etc/systemd/system/`
+  - **macOS**: Creates a launchd plist in `/Library/LaunchDaemons/com.gumieri.nenya.plist`
+  - **Windows**: Not supported — use `nenyactl containers setup` instead
 
 ## Usage
 
