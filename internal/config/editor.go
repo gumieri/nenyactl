@@ -29,13 +29,14 @@ type configEntry struct {
 }
 
 type configModel struct {
-	screen    configScreen
-	config    *hujson.Value
-	sections  []string
-	cursor    int
-	entries   []configEntry
-	editKey   string
-	editInput textinput.Model
+	screen        configScreen
+	config        *hujson.Value
+	sections      []string
+	cursor        int
+	entries       []configEntry
+	editKey       string
+	editInput     textinput.Model
+	activeSection string
 
 	sectionsView  viewport.Model
 	keysView      viewport.Model
@@ -179,6 +180,7 @@ func (m *configModel) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *configModel) loadSection(sectionName string) {
+	m.activeSection = sectionName
 	field, ok := jsonc.GetField(m.config, sectionName)
 	if !ok {
 		m.entries = nil
@@ -228,7 +230,7 @@ func (m *configModel) applyEdit() {
 		return
 	}
 
-	entry.Value.Value = hujson.Literal(raw)
+	entry.Value.Value = parseLiteralValue(raw)
 }
 
 func (m *configModel) scrollSections() {
@@ -360,30 +362,7 @@ func (m configModel) renderSections() string {
 func (m configModel) viewKeys() string {
 	theme := tui.Current()
 
-	sectionName := ""
-	if len(m.sections) > 0 {
-		sectionName = m.sections[0]
-		for _, s := range m.sections {
-			field, ok := jsonc.GetField(m.config, s)
-			if ok {
-				if _, isObj := field.Value.(*hujson.Object); isObj {
-					found := false
-					for _, e := range m.entries {
-						if e.Key == s {
-							found = true
-							break
-						}
-					}
-					if found {
-						sectionName = s
-						break
-					}
-				}
-			}
-		}
-	}
-
-	title := theme.Title.Render(fmt.Sprintf("Section: %s", sectionName))
+	title := theme.Title.Render(fmt.Sprintf("Section: %s", m.activeSection))
 	subtitle := theme.Dimmed.Render("Enter to edit value · Esc to go back")
 
 	body := lipgloss.JoinVertical(lipgloss.Top, title, "", subtitle, "", m.keysView.View())

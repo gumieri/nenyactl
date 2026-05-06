@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/gumieri/nenyactl/internal/config"
 	"github.com/gumieri/nenyactl/internal/detect"
@@ -75,7 +76,7 @@ func bootstrapConfig(dir string) error {
 	}
 
 	for name, content := range files {
-		path := dir + "/" + name
+		path := filepath.Join(dir, name)
 		if _, err := os.Stat(path); err == nil {
 			fmt.Println(dimStyle.Render("  ∃"), "Skipping existing", path)
 			continue
