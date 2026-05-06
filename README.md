@@ -289,3 +289,4 @@ install -m 755 bin/nenyactl /usr/local/bin/
 [ci]: https://img.shields.io/github/actions/workflow/status/gumieri/nenyactl/test.yml?branch=main&logo=github&logoColor=white&label=CI
 [codeql]: https://img.shields.io/github/actions/workflow/status/gumieri/nenyactl/codeql.yml?branch=main&logo=github&logoColor=white&label=CodeQL
 [release]: https://img.shields.io/github/v/release/gumieri/nenyactl?logo=github&logoColor=white&sort=semver
+[sponsor]: https://img.shields.io/badge/Sponsor-gumieri-ff69b4?logo=github&logoColor=white
