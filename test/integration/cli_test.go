@@ -165,9 +165,15 @@ func TestAgentsCommand(t *testing.T) {
 	// Manually create minimal setup to avoid permission issues
 	configDir := filepath.Join(tmp, "config")
 	secretsDir := filepath.Join(tmp, "secrets")
-	os.MkdirAll(configDir, 0o755)
-	os.MkdirAll(secretsDir, 0o700)
-	os.WriteFile(filepath.Join(configDir, "config.json"), []byte(`{"discovery":{"auto_agents":true}}`), 0o644)
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	if err := os.MkdirAll(secretsDir, 0o700); err != nil {
+		t.Fatalf("mkdir secrets: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(`{"discovery":{"auto_agents":true}}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	_, _, err := runNenyactl(t, "agents")
 	if err != nil {
@@ -249,9 +255,15 @@ func TestSecretBootstrap(t *testing.T) {
 
 	configDir := filepath.Join(tmp, "config")
 	secretsDir := filepath.Join(tmp, "secrets")
-	os.MkdirAll(configDir, 0o755)
-	os.MkdirAll(secretsDir, 0o700)
-	os.WriteFile(filepath.Join(configDir, "config.json"), []byte(`{}`), 0o644)
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	if err := os.MkdirAll(secretsDir, 0o700); err != nil {
+		t.Fatalf("mkdir secrets: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	// Run bootstrap
 	bin := getBinPath()
@@ -286,10 +298,18 @@ func TestContainerStatus(t *testing.T) {
 
 	configDir := filepath.Join(tmp, "config")
 	secretsDir := filepath.Join(tmp, "secrets")
-	os.MkdirAll(configDir, 0o755)
-	os.MkdirAll(secretsDir, 0o700)
-	os.WriteFile(filepath.Join(configDir, "config.json"), []byte(`{}`), 0o644)
-	os.WriteFile(filepath.Join(tmp, "compose.yml"), []byte(`services: {}`), 0o644)
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	if err := os.MkdirAll(secretsDir, 0o700); err != nil {
+		t.Fatalf("mkdir secrets: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "compose.yml"), []byte(`services: {}`), 0o644); err != nil {
+		t.Fatalf("write compose: %v", err)
+	}
 
 	startCmd := exec.Command(getBinPath(), "containers", "start", "--dir", tmp)
 	if out, err := startCmd.CombinedOutput(); err != nil {

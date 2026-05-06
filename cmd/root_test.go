@@ -116,10 +116,3 @@ func TestExecute(t *testing.T) {
 		}
 	})
 }
-
-func TestFatalf(t *testing.T) {
-	t.Run("fatalf compiles and accepts format string", func(t *testing.T) {
-		// Can't test os.Exit without killing the test process.
-		// Just verify the function compiles.
-	})
-}

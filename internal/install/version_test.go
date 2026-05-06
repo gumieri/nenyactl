@@ -14,7 +14,7 @@ func TestFetchLatestVersionWithHTTP(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			resp := Release{TagName: "v1.2.3"}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		}))
 		defer server.Close()
 
@@ -50,7 +50,7 @@ func TestFetchLatestVersionWithHTTP(t *testing.T) {
 	t.Run("returns error on invalid JSON", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte("invalid json"))
+			_, _ = w.Write([]byte("invalid json"))
 		}))
 		defer server.Close()
 
@@ -71,7 +71,7 @@ func TestFetchLatestVersionWithHTTP(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			time.Sleep(50 * time.Millisecond)
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(Release{TagName: "v1.0.0"})
+			_ = json.NewEncoder(w).Encode(Release{TagName: "v1.0.0"})
 		}))
 		defer server.Close()
 
@@ -91,7 +91,7 @@ func TestFetchLatestVersion(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			resp := Release{TagName: "v2.0.0"}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		}))
 		defer server.Close()
 
@@ -114,7 +114,7 @@ func TestCheckLatestVersion(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			resp := Release{TagName: "v3.0.0"}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		}))
 		defer server.Close()
 

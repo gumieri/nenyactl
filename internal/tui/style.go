@@ -86,33 +86,33 @@ func light() Theme {
 
 func mkTheme(base lipgloss.Style, bg, fg, blue, purple, cyan, green, orange, red, gray, selBg lipgloss.Color) Theme {
 	return Theme{
-		Title:     base.Copy().Bold(true).Foreground(blue),
-		Subtitle:  base.Copy().Bold(true).Foreground(purple),
+		Title:     base.Bold(true).Foreground(blue),
+		Subtitle:  base.Bold(true).Foreground(purple),
 		Body:      base,
-		Dimmed:    base.Copy().Foreground(gray),
-		Highlight: base.Copy().Background(selBg),
-		Accent:    base.Copy().Foreground(cyan),
-		Success:   base.Copy().Foreground(green),
-		Warning:   base.Copy().Foreground(orange),
-		Error:     base.Copy().Foreground(red),
+		Dimmed:    base.Foreground(gray),
+		Highlight: base.Background(selBg),
+		Accent:    base.Foreground(cyan),
+		Success:   base.Foreground(green),
+		Warning:   base.Foreground(orange),
+		Error:     base.Foreground(red),
 
-		Cursor:      base.Copy().Bold(true).Foreground(cyan),
+		Cursor:      base.Bold(true).Foreground(cyan),
 		SelectedRow: lipgloss.NewStyle().Background(selBg).Foreground(fg),
 		Scrollbar:   lipgloss.NewStyle().Background(gray).Foreground(gray),
 
 		Checked:   lipgloss.NewStyle().Foreground(green),
-		Unchecked: base.Copy().Foreground(gray),
+		Unchecked: base.Foreground(gray),
 		RadioOn:   lipgloss.NewStyle().Foreground(blue),
-		RadioOff:  base.Copy().Foreground(gray),
+		RadioOff:  base.Foreground(gray),
 
 		InputFocused: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(blue),
 		InputBlurred: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(gray),
 
 		Border:         lipgloss.RoundedBorder(),
-		BorderColor:    base.Copy().Border(lipgloss.RoundedBorder()).BorderForeground(gray),
+		BorderColor:    base.Border(lipgloss.RoundedBorder()).BorderForeground(gray),
 		BorderFocused:  lipgloss.RoundedBorder(),
-		BorderColorFoc: base.Copy().Border(lipgloss.RoundedBorder()).BorderForeground(blue),
+		BorderColorFoc: base.Border(lipgloss.RoundedBorder()).BorderForeground(blue),
 
-		App: base.Copy().Background(bg),
+		App: base.Background(bg),
 	}
 }

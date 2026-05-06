@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func untar(src, dst string) error {
@@ -14,13 +15,13 @@ func untar(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	gzr, err := gzip.NewReader(f)
 	if err != nil {
 		return fmt.Errorf("gzip reader: %w", err)
 	}
-	defer gzr.Close()
+	defer func() { _ = gzr.Close() }()
 
 	tr := tar.NewReader(gzr)
 	for {
@@ -33,7 +34,7 @@ func untar(src, dst string) error {
 		}
 
 		path := filepath.Join(dst, header.Name)
-		if !filepath.HasPrefix(path, filepath.Clean(dst)+string(os.PathSeparator)) {
+		if !strings.HasPrefix(path, filepath.Clean(dst)+string(os.PathSeparator)) {
 			return fmt.Errorf("invalid tar path: %s", header.Name)
 		}
 
@@ -51,10 +52,10 @@ func untar(src, dst string) error {
 				return err
 			}
 			if _, err := io.Copy(out, tr); err != nil {
-				out.Close()
+				_ = out.Close()
 				return err
 			}
-			out.Close()
+			_ = out.Close()
 			if err := os.Chmod(path, os.FileMode(header.Mode)); err != nil {
 				return err
 			}

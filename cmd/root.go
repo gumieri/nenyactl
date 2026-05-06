@@ -1,9 +1,6 @@
 package cmd
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/spf13/cobra"
 )
 
@@ -18,10 +15,4 @@ bootstrapping, and secret generation.`,
 
 func Execute() error {
 	return rootCmd.Execute()
-}
-
-func fatalf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "%s ", errorStyle.Render("✗"))
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
-	os.Exit(1)
 }

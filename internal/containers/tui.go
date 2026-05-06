@@ -167,13 +167,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.table.SetWidth(msg.Width - 4)
 	}
 
-	if m.screen == screenSelect {
+	switch m.screen {
+	case screenSelect:
 		m.table, cmd = m.table.Update(msg)
-	} else if m.screen == screenKeys {
+	case screenKeys:
 		if m.keyCursor < len(m.keys) {
 			m.keys[m.keyCursor].input, cmd = m.keys[m.keyCursor].input.Update(msg)
 		}
-	} else if m.screen == screenCustom {
+	case screenCustom:
 		if m.customFocus == 0 {
 			m.customName, cmd = m.customName.Update(msg)
 		} else {

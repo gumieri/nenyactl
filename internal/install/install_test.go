@@ -34,8 +34,8 @@ func containTarGz(t *testing.T, files map[string]string) []byte {
 		}
 	}
 
-	tarW.Close()
-	gzW.Close()
+	_ = tarW.Close()
+	_ = gzW.Close()
 	return buf.Bytes()
 }
 
@@ -165,7 +165,7 @@ func TestDownload(t *testing.T) {
 	t.Run("successful download", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("binary-data"))
+			_, _ = w.Write([]byte("binary-data"))
 		}))
 		defer server.Close()
 
@@ -204,7 +204,7 @@ func TestInstall(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write(tarGz)
+		_, _ = w.Write(tarGz)
 	}))
 	defer server.Close()
 
@@ -269,11 +269,10 @@ func TestInstallWithHTTP(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write(tarGz)
+		_, _ = w.Write(tarGz)
 	}))
 	defer server.Close()
 
-	// Override downloadURL to point to test server
 	savedDownloadURL := downloadURL
 	downloadURL = func(version string) string { return server.URL + "/download" }
 	t.Cleanup(func() { downloadURL = savedDownloadURL })
@@ -310,7 +309,7 @@ func TestInstallWithHTTPWindowsError(t *testing.T) {
 	t.Run("returns Windows-specific error", func(t *testing.T) {
 		tarGz := containTarGz(t, map[string]string{"nenya": "data"})
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Write(tarGz)
+			_, _ = w.Write(tarGz)
 		}))
 		defer server.Close()
 

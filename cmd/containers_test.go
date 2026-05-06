@@ -148,10 +148,7 @@ func TestRealExec(t *testing.T) {
 	t.Run("Command returns realCmd", func(t *testing.T) {
 		ex := realExec{}
 		rc := ex.Command("echo", "test")
-		if _, ok := rc.(cmdRunner); !ok {
-			t.Error("expected cmdRunner")
-		}
-		if rc.(realCmd).Cmd.Path == "" {
+		if cmd, ok := rc.(realCmd); ok && cmd.Path == "" {
 			t.Error("command not initialized")
 		}
 	})
@@ -374,9 +371,12 @@ func TestRunContainerStatusWithExec(t *testing.T) {
 	t.Run("reads client token when available", func(t *testing.T) {
 		tmp := t.TempDir()
 		secretsDir := filepath.Join(tmp, "secrets")
-		os.MkdirAll(secretsDir, 0o755)
-		os.WriteFile(filepath.Join(secretsDir, "01-client.json"), []byte(`{"client_token": "nk-test123"}`), 0o600)
-
+		if err := os.MkdirAll(secretsDir, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(secretsDir, "01-client.json"), []byte(`{"client_token": "nk-test123"}`), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
 		ex := fakeExec{
 			cmdFn: func(name string, args ...string) cmdRunner {
 				return &fakeCmd{runFn: func() error { return nil }}

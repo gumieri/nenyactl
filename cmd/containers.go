@@ -283,7 +283,7 @@ func runContainerStatusWithExec(ex execer, dir string) error {
 		fmt.Println(errorStyle.Render("✗"), "Connection failed:", err)
 		return nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == 200 {
 		fmt.Println(successStyle.Render("✓"), "Nenya is healthy")
 	} else {

@@ -237,8 +237,8 @@ func TestDetectRuntime(t *testing.T) {
 			t.Fatalf("failed to create podman script: %v", err)
 		}
 		oldPath := os.Getenv("PATH")
-		t.Cleanup(func() { os.Setenv("PATH", oldPath) })
-		os.Setenv("PATH", tmp)
+		t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+		_ = os.Setenv("PATH", tmp)
 
 		r := DetectRuntime()
 		if r != Podman {
@@ -248,8 +248,8 @@ func TestDetectRuntime(t *testing.T) {
 
 	t.Run("falls back to docker if podman not available", func(t *testing.T) {
 		oldPath := os.Getenv("PATH")
-		t.Cleanup(func() { os.Setenv("PATH", oldPath) })
-		os.Setenv("PATH", "/nonexistent")
+		t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+		_ = os.Setenv("PATH", "/nonexistent")
 
 		r := DetectRuntime()
 		if r != Docker {
@@ -266,8 +266,8 @@ func TestComposeCmd(t *testing.T) {
 			t.Fatalf("failed to create podman script: %v", err)
 		}
 		oldPath := os.Getenv("PATH")
-		t.Cleanup(func() { os.Setenv("PATH", oldPath) })
-		os.Setenv("PATH", tmp)
+		t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+		_ = os.Setenv("PATH", tmp)
 
 		cmd, args, err := ComposeCmd()
 		if err != nil {
@@ -283,8 +283,8 @@ func TestComposeCmd(t *testing.T) {
 
 	t.Run("falls back to docker if podman not available", func(t *testing.T) {
 		oldPath := os.Getenv("PATH")
-		t.Cleanup(func() { os.Setenv("PATH", oldPath) })
-		os.Setenv("PATH", "/nonexistent")
+		t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+		_ = os.Setenv("PATH", "/nonexistent")
 
 		cmd, args, err := ComposeCmd()
 		if err != nil {

@@ -63,7 +63,9 @@ func TestRunSecretBootstrap(t *testing.T) {
 
 	t.Run("refuses to overwrite existing", func(t *testing.T) {
 		tmp := t.TempDir()
-		os.WriteFile(filepath.Join(tmp, "secrets.json"), []byte("{}"), 0o644)
+		if err := os.WriteFile(filepath.Join(tmp, "secrets.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatalf("write secrets.json: %v", err)
+		}
 		bootstrapDir = tmp
 		err := runSecretBootstrap(&cobra.Command{}, nil)
 		if err == nil {

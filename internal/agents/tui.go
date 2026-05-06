@@ -118,9 +118,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if m.screen == screenEdit {
+	switch m.screen {
+	case screenEdit:
 		m.editName, _ = m.editName.Update(msg)
-	} else if m.screen == screenPicker {
+	case screenPicker:
 		m.modelFilter, _ = m.modelFilter.Update(msg)
 		if m.modelFilter.Focused() {
 			m.loadModels()
@@ -189,14 +190,15 @@ func (m *tuiModel) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.scrollAgents()
 		return m, nil
 	case "enter":
-		if m.editCursor == 0 {
-			m.editCursor = 1
-			return m, nil
-		} else if m.editCursor == 1 {
-			m.editCursor = 2
-			return m, nil
-		} else {
-			m.screen = screenPicker
+		switch m.editCursor {
+	case 0:
+		m.editCursor = 1
+		return m, nil
+	case 1:
+		m.editCursor = 2
+		return m, nil
+	default:
+		m.screen = screenPicker
 			m.modelFilter.Reset()
 			m.modelCursor = 0
 			m.loadModels()
@@ -495,7 +497,7 @@ func (m tuiModel) renderAgentList() string {
 	var lines []string
 
 	for i, a := range m.agents {
-		prefix := "  "
+		var prefix string
 		style := theme.Body
 		idx := i + 1
 		if idx == m.cursor {

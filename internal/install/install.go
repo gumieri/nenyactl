@@ -51,7 +51,7 @@ func InstallWithHTTP(ctx context.Context, cfg Config, hc HTTPDoer) error {
 	if err != nil {
 		return fmt.Errorf("create temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	archive := filepath.Join(tmpDir, "nenya.tar.gz")
 	if err := downloadWith(ctx, url, archive, hc); err != nil {
@@ -160,7 +160,7 @@ func downloadWith(ctx context.Context, url, dest string, hc HTTPDoer) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status %s for %s", resp.Status, url)
@@ -170,7 +170,7 @@ func downloadWith(ctx context.Context, url, dest string, hc HTTPDoer) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 
 	_, err = io.Copy(out, resp.Body)
 	return err
@@ -181,13 +181,13 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	d, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 
 	if _, err := io.Copy(d, s); err != nil {
 		return err
