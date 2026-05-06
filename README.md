@@ -286,6 +286,6 @@ install -m 755 bin/nenyactl /usr/local/bin/
 
 [go-version]: https://img.shields.io/badge/Go-1.26-00ADD8?logo=golang&logoColor=white
 [license]: https://img.shields.io/badge/License-Apache_2.0-5B44C2?logo=apache&logoColor=white
-[ci]: https://img.shields.io/github/actions/workflow/status/gumieri/nenyactl/ci.yml?branch=main&logo=github&logoColor=white&label=CI
+[ci]: https://img.shields.io/github/actions/workflow/status/gumieri/nenyactl/test.yml?branch=main&logo=github&logoColor=white&label=CI
 [codeql]: https://img.shields.io/github/actions/workflow/status/gumieri/nenyactl/codeql.yml?branch=main&logo=github&logoColor=white&label=CodeQL
 [release]: https://img.shields.io/github/v/release/gumieri/nenyactl?logo=github&logoColor=white&sort=semver
