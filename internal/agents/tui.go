@@ -13,7 +13,9 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/gumieri/nenyactl/internal/jsonc"
 	"github.com/gumieri/nenyactl/internal/tui"
+	"github.com/tailscale/hujson"
 )
 
 type screen int
@@ -795,35 +797,19 @@ func WriteAgentsConfig(configDir string, cfg map[string]any) error {
 }
 
 func UpdateConfigDiscovery(configFile string, autoAgents bool) error {
-	data, err := os.ReadFile(configFile)
+	v, err := jsonc.ReadFile(configFile)
 	if err != nil {
 		return err
 	}
 
-	var cfg map[string]any
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("invalid config JSON: %w", err)
+	if !jsonc.SetNestedField(v, []string{"discovery", "auto_agents"}, hujson.Literal(fmt.Sprintf("%v", autoAgents))) {
+		if _, ok := jsonc.GetField(v, "discovery"); ok {
+			return fmt.Errorf("config.discovery is not a map")
+		}
+		jsonc.SetField(v, "discovery", hujson.Literal(fmt.Sprintf(`{"auto_agents": %v}`, autoAgents)))
 	}
 
-	if cfg["discovery"] == nil {
-		cfg["discovery"] = make(map[string]any)
-	}
-	disco, ok := cfg["discovery"].(map[string]any)
-	if !ok {
-		return fmt.Errorf("config.discovery is not a map, got %T", cfg["discovery"])
-	}
-	disco["auto_agents"] = autoAgents
-
-	out, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	tmpPath := configFile + ".tmp"
-	if err := os.WriteFile(tmpPath, out, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, configFile)
+	return jsonc.WriteFile(configFile, v, 0o644)
 }
 
 func init() {
