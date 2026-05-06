@@ -84,15 +84,7 @@ jobs:
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
-    services:
-      docker:
-        image: docker:dind
-        options: --privileged
-        ports:
-          - 2375:2375
     env:
-      DOCKER_HOST: tcp://localhost:2375
-      DOCKER_TLS_CERTDIR: ""
       NENYACTL_RUNTIME: docker
     steps:
       - name: Checkout
@@ -110,30 +102,10 @@ jobs:
       - name: Build nenyactl
         run: go build -o bin/nenyactl ./cmd/nenyactl/
 
-      - name: Wait for Docker daemon
+      - name: Verify Docker is available
         run: |
-          for i in $(seq 1 30); do
-            if command docker info >/dev/null 2>&1; then
-              echo "Docker daemon ready"
-              docker info --format '{{.ServerVersion}}'
-              break
-            fi
-            # Fallback: test TCP directly in case docker CLI is podman
-            if timeout 2 bash -c 'echo >/dev/tcp/localhost/2375' 2>/dev/null; then
-              echo "TCP port 2375 ready"
-              break
-            fi
-            echo "Waiting for Docker daemon... ($i/30)"
-            sleep 2
-          done
-          # Verify final state
-          command docker info >/dev/null 2>&1 || timeout 2 bash -c 'echo >/dev/tcp/localhost/2375' 2>/dev/null || { echo "Docker daemon not ready after 60s"; exit 1; }
-
-      - name: Log Docker status
-        run: |
-          docker version
-          docker system df
-          docker images
+          docker info --format 'Docker {{.ServerVersion}} ready'
+          docker compose version
 
       - name: Run full workflow
         env:
