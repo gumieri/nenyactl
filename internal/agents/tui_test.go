@@ -494,11 +494,12 @@ func TestWriteAgentsConfig(t *testing.T) {
 			},
 		}
 
-		if err := WriteAgentsConfig(tmp, cfg); err != nil {
+		configD := filepath.Join(tmp, "config.d")
+		if err := WriteAgentsConfig(configD, cfg); err != nil {
 			t.Fatalf("WriteAgentsConfig() error = %v", err)
 		}
 
-		agentsPath := filepath.Join(tmp, "config.d", "20-agents.json")
+		agentsPath := filepath.Join(configD, "20-agents.json")
 		data, err := os.ReadFile(agentsPath)
 		if err != nil {
 			t.Fatalf("read agents config: %v", err)
@@ -525,11 +526,11 @@ func TestWriteAgentsConfig(t *testing.T) {
 			"discovery": map[string]any{"auto_agents": false},
 		}
 
-		if err := WriteAgentsConfig(tmp, cfg); err != nil {
+		configD := filepath.Join(tmp, "config.d")
+		if err := WriteAgentsConfig(configD, cfg); err != nil {
 			t.Fatalf("WriteAgentsConfig() error = %v", err)
 		}
 
-		configD := filepath.Join(tmp, "config.d")
 		if _, err := os.Stat(configD); os.IsNotExist(err) {
 			t.Error("config.d directory not created")
 		}
@@ -539,25 +540,21 @@ func TestWriteAgentsConfig(t *testing.T) {
 func TestUpdateConfigDiscovery(t *testing.T) {
 	t.Run("sets auto_agents to true", func(t *testing.T) {
 		tmp := t.TempDir()
-		configPath := filepath.Join(tmp, "config", "config.json")
-		configDir := filepath.Dir(configPath)
-		if err := os.MkdirAll(configDir, 0o755); err != nil {
-			t.Fatalf("mkdir: %v", err)
-		}
+		configFile := filepath.Join(tmp, "config.json")
 
 		initialCfg := map[string]any{
 			"server": map[string]any{"listen_addr": ":8080"},
 		}
 		initialData, _ := json.MarshalIndent(initialCfg, "", "  ")
-		if err := os.WriteFile(configPath, initialData, 0o644); err != nil {
+		if err := os.WriteFile(configFile, initialData, 0o644); err != nil {
 			t.Fatalf("write config: %v", err)
 		}
 
-		if err := UpdateConfigDiscovery(tmp, true); err != nil {
+		if err := UpdateConfigDiscovery(configFile, true); err != nil {
 			t.Fatalf("UpdateConfigDiscovery() error = %v", err)
 		}
 
-		data, err := os.ReadFile(configPath)
+		data, err := os.ReadFile(configFile)
 		if err != nil {
 			t.Fatalf("read config: %v", err)
 		}
@@ -578,25 +575,21 @@ func TestUpdateConfigDiscovery(t *testing.T) {
 
 	t.Run("sets auto_agents to false", func(t *testing.T) {
 		tmp := t.TempDir()
-		configPath := filepath.Join(tmp, "config", "config.json")
-		configDir := filepath.Dir(configPath)
-		if err := os.MkdirAll(configDir, 0o755); err != nil {
-			t.Fatalf("mkdir: %v", err)
-		}
+		configFile := filepath.Join(tmp, "config.json")
 
 		initialCfg := map[string]any{
 			"discovery": map[string]any{"auto_agents": true},
 		}
 		initialData, _ := json.MarshalIndent(initialCfg, "", "  ")
-		if err := os.WriteFile(configPath, initialData, 0o644); err != nil {
+		if err := os.WriteFile(configFile, initialData, 0o644); err != nil {
 			t.Fatalf("write config: %v", err)
 		}
 
-		if err := UpdateConfigDiscovery(tmp, false); err != nil {
+		if err := UpdateConfigDiscovery(configFile, false); err != nil {
 			t.Fatalf("UpdateConfigDiscovery() error = %v", err)
 		}
 
-		data, err := os.ReadFile(configPath)
+		data, err := os.ReadFile(configFile)
 		if err != nil {
 			t.Fatalf("read config: %v", err)
 		}
@@ -617,23 +610,19 @@ func TestUpdateConfigDiscovery(t *testing.T) {
 
 	t.Run("creates discovery section if missing", func(t *testing.T) {
 		tmp := t.TempDir()
-		configPath := filepath.Join(tmp, "config", "config.json")
-		configDir := filepath.Dir(configPath)
-		if err := os.MkdirAll(configDir, 0o755); err != nil {
-			t.Fatalf("mkdir: %v", err)
-		}
+		configFile := filepath.Join(tmp, "config.json")
 
 		initialCfg := map[string]any{"server": map[string]any{}}
 		initialData, _ := json.MarshalIndent(initialCfg, "", "  ")
-		if err := os.WriteFile(configPath, initialData, 0o644); err != nil {
+		if err := os.WriteFile(configFile, initialData, 0o644); err != nil {
 			t.Fatalf("write config: %v", err)
 		}
 
-		if err := UpdateConfigDiscovery(tmp, true); err != nil {
+		if err := UpdateConfigDiscovery(configFile, true); err != nil {
 			t.Fatalf("UpdateConfigDiscovery() error = %v", err)
 		}
 
-		data, err := os.ReadFile(configPath)
+		data, err := os.ReadFile(configFile)
 		if err != nil {
 			t.Fatalf("read config: %v", err)
 		}

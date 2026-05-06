@@ -38,26 +38,26 @@ type modelState struct {
 }
 
 type tuiModel struct {
-	screen    screen
-	modeAuto  bool
-	agents    []Agent
-	cursor    int
+	screen   screen
+	modeAuto bool
+	agents   []Agent
+	cursor   int
 
-	editName   textinput.Model
+	editName    textinput.Model
 	strategyIdx int
-	editCursor int
+	editCursor  int
 
-	models    []modelState
+	models      []modelState
 	modelCursor int
 	modelFilter textinput.Model
 
 	deleteIdx int
 
-	agentsView viewport.Model
-	pickerView viewport.Model
+	agentsView    viewport.Model
+	pickerView    viewport.Model
 	width, height int
-	helpModel help.Model
-	helpKM    tui.KeyMap
+	helpModel     help.Model
+	helpKM        tui.KeyMap
 
 	done bool
 }
@@ -191,14 +191,14 @@ func (m *tuiModel) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		switch m.editCursor {
-	case 0:
-		m.editCursor = 1
-		return m, nil
-	case 1:
-		m.editCursor = 2
-		return m, nil
-	default:
-		m.screen = screenPicker
+		case 0:
+			m.editCursor = 1
+			return m, nil
+		case 1:
+			m.editCursor = 2
+			return m, nil
+		default:
+			m.screen = screenPicker
 			m.modelFilter.Reset()
 			m.modelCursor = 0
 			m.loadModels()
@@ -776,24 +776,22 @@ func RunAgentEditor() (bool, map[string]any, error) {
 	return false, cfg, nil
 }
 
-func WriteAgentsConfig(dir string, cfg map[string]any) error {
+func WriteAgentsConfig(configDir string, cfg map[string]any) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
 
-	configD := filepath.Join(dir, "config.d")
-	if err := os.MkdirAll(configD, 0o755); err != nil {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		return err
 	}
 
-	path := filepath.Join(configD, "20-agents.json")
+	path := filepath.Join(configDir, "20-agents.json")
 	return os.WriteFile(path, data, 0o644)
 }
 
-func UpdateConfigDiscovery(dir string, autoAgents bool) error {
-	configPath := filepath.Join(dir, "config", "config.json")
-	data, err := os.ReadFile(configPath)
+func UpdateConfigDiscovery(configFile string, autoAgents bool) error {
+	data, err := os.ReadFile(configFile)
 	if err != nil {
 		return err
 	}
@@ -822,7 +820,7 @@ func UpdateConfigDiscovery(dir string, autoAgents bool) error {
 		return err
 	}
 
-	return os.WriteFile(configPath, out, 0o644)
+	return os.WriteFile(configFile, out, 0o644)
 }
 
 func init() {
