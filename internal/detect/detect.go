@@ -43,7 +43,7 @@ func Detect() (*Info, error) {
 			return p, nil
 		}
 		for _, p := range knownBinPaths() {
-			if _, statErr := os.Stat(p); statErr == nil {
+			if info, statErr := os.Stat(p); statErr == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
 				return p, nil
 			}
 		}
@@ -104,26 +104,20 @@ func detectBareMetal(look lookPathFn, systemConfigDirFn func() string) (*Info, e
 		BinPath:    binPath,
 	}
 
-	if _, statErr := os.Stat(configFile); statErr != nil {
-		if errors.Is(statErr, os.ErrPermission) {
-			return nil, &PermissionError{
-				Path:    configFile,
-				BinPath: binPath,
+	if _, readErr := os.ReadFile(configFile); readErr != nil {
+		if errors.Is(readErr, os.ErrNotExist) {
+			return nil, &ConfigNotFoundError{
+				ConfigFile: configFile,
+				BinPath:    binPath,
 			}
 		}
-		return nil, &ConfigNotFoundError{
-			ConfigFile: configFile,
-			BinPath:    binPath,
-		}
-	}
-
-	if _, readErr := os.ReadFile(configFile); readErr != nil {
 		if errors.Is(readErr, os.ErrPermission) {
 			return nil, &PermissionError{
 				Path:    configFile,
 				BinPath: binPath,
 			}
 		}
+		return nil, fmt.Errorf("read config: %w", readErr)
 	}
 
 	return info, nil
@@ -136,18 +130,13 @@ func detectContainer() (*Info, error) {
 	}
 
 	composePath := filepath.Join(containerDir, "compose.yml")
-	configDir := filepath.Join(containerDir, "config")
-	configFile := filepath.Join(configDir, "config.json")
+	configFile := filepath.Join(containerDir, "config", "config.json")
 
-	composeExists := false
-	if _, statErr := os.Stat(composePath); statErr == nil {
-		composeExists = true
-	}
+	_, composeStatErr := os.Stat(composePath)
+	_, configStatErr := os.Stat(configFile)
 
-	configExists := false
-	if _, statErr := os.Stat(configFile); statErr == nil {
-		configExists = true
-	}
+	composeExists := composeStatErr == nil
+	configExists := configStatErr == nil
 
 	if !composeExists && !configExists {
 		return nil, fmt.Errorf("no container deployment found at %s", containerDir)
@@ -169,40 +158,37 @@ func detectContainer() (*Info, error) {
 					IsContainer: true,
 				}
 			}
+			return nil, fmt.Errorf("read container config: %w", readErr)
 		}
 	}
 
 	return info, nil
 }
 
-func DetectFromDir(dir string, mode Mode) *Info {
+func DetectFromDir(dir string, mode Mode) (*Info, error) {
 	switch mode {
 	case ModeBareMetal:
 		return &Info{
 			Mode:       ModeBareMetal,
 			ConfigFile: filepath.Join(dir, "config.json"),
 			ConfigD:    filepath.Join(dir, "config.d"),
-		}
+		}, nil
 	case ModeContainer:
 		return &Info{
 			Mode:       ModeContainer,
 			ConfigFile: filepath.Join(dir, "config", "config.json"),
 			ConfigD:    dir,
 			DataDir:    dir,
-		}
+		}, nil
 	default:
-		return &Info{
-			Mode:       ModeBareMetal,
-			ConfigFile: filepath.Join(dir, "config.json"),
-			ConfigD:    filepath.Join(dir, "config.d"),
-		}
+		return nil, fmt.Errorf("invalid mode: %d", mode)
 	}
 }
 
 func knownBinPaths() []string {
-	ps := []string{paths.SystemBinDir() + "/nenya"}
+	ps := []string{filepath.Join(paths.SystemBinDir(), "nenya")}
 	if userBin, err := paths.UserBinDir(); err == nil {
-		ps = append(ps, userBin+"/nenya")
+		ps = append(ps, filepath.Join(userBin, "nenya"))
 	}
 	return ps
 }

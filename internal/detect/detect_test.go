@@ -273,7 +273,10 @@ func TestDetectFromDir(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		info := DetectFromDir(tmp, ModeBareMetal)
+		info, err := DetectFromDir(tmp, ModeBareMetal)
+		if err != nil {
+			t.Fatalf("DetectFromDir() error = %v", err)
+		}
 
 		if info.Mode != ModeBareMetal {
 			t.Errorf("Mode = %v, want %v", info.Mode, ModeBareMetal)
@@ -298,7 +301,10 @@ func TestDetectFromDir(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		info := DetectFromDir(tmp, ModeContainer)
+		info, err := DetectFromDir(tmp, ModeContainer)
+		if err != nil {
+			t.Fatalf("DetectFromDir() error = %v", err)
+		}
 
 		if info.Mode != ModeContainer {
 			t.Errorf("Mode = %v, want %v", info.Mode, ModeContainer)
@@ -314,13 +320,12 @@ func TestDetectFromDir(t *testing.T) {
 		}
 	})
 
-	t.Run("unknown mode defaults to bare-metal layout", func(t *testing.T) {
+	t.Run("unknown mode returns error", func(t *testing.T) {
 		tmp := t.TempDir()
 
-		info := DetectFromDir(tmp, ModeNone)
-
-		if info.ConfigFile != filepath.Join(tmp, "config.json") {
-			t.Errorf("ConfigFile = %v, want %v", info.ConfigFile, filepath.Join(tmp, "config.json"))
+		_, err := DetectFromDir(tmp, ModeNone)
+		if err == nil {
+			t.Fatal("expected error for invalid mode")
 		}
 	})
 }

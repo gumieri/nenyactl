@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/gumieri/nenyactl/internal/agents"
 	"github.com/gumieri/nenyactl/internal/detect"
@@ -33,7 +34,13 @@ func runAgents(cmd *cobra.Command, args []string) error {
 	var err error
 
 	if agentsDir != "" {
-		info = detect.DetectFromDir(agentsDir, detect.ModeBareMetal)
+		if _, statErr := os.Stat(agentsDir); statErr != nil {
+			return fmt.Errorf("--dir: %w", statErr)
+		}
+		info, err = detect.DetectFromDir(agentsDir, detect.ModeBareMetal)
+		if err != nil {
+			return err
+		}
 	} else {
 		info, err = detect.Detect()
 		if err != nil {

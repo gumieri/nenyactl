@@ -787,7 +787,11 @@ func WriteAgentsConfig(configDir string, cfg map[string]any) error {
 	}
 
 	path := filepath.Join(configDir, "20-agents.json")
-	return os.WriteFile(path, data, 0o644)
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func UpdateConfigDiscovery(configFile string, autoAgents bool) error {
@@ -798,29 +802,28 @@ func UpdateConfigDiscovery(configFile string, autoAgents bool) error {
 
 	var cfg map[string]any
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		var raw map[string]json.RawMessage
-		if err2 := json.Unmarshal(data, &raw); err2 != nil {
-			return err2
-		}
-		cfg = make(map[string]any)
-		for k, v := range raw {
-			cfg[k] = v
-		}
+		return fmt.Errorf("invalid config JSON: %w", err)
 	}
 
 	if cfg["discovery"] == nil {
 		cfg["discovery"] = make(map[string]any)
 	}
-	if disco, ok := cfg["discovery"].(map[string]any); ok {
-		disco["auto_agents"] = autoAgents
+	disco, ok := cfg["discovery"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("config.discovery is not a map, got %T", cfg["discovery"])
 	}
+	disco["auto_agents"] = autoAgents
 
 	out, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
 
-	return os.WriteFile(configFile, out, 0o644)
+	tmpPath := configFile + ".tmp"
+	if err := os.WriteFile(tmpPath, out, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, configFile)
 }
 
 func init() {
