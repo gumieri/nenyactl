@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gumieri/nenyactl/internal/agents"
 	"github.com/gumieri/nenyactl/internal/jsonc"
 	"github.com/gumieri/nenyactl/internal/tui"
 	"github.com/tailscale/hujson"
@@ -61,21 +59,16 @@ type configModel struct {
 	dirty   map[string]bool
 
 	// agents section state
-	agents          []agentEntry
-	agentsModeAuto  bool
-	agentsFile      string
-	agentsDirty     bool
-	agentCursor     int
-	editName        textinput.Model
-	modelFilter     textinput.Model
-	strategyIdx     int
-	editCursor      int
-	modelFilterFocused bool
+	agents         []agentEntry
+	agentsModeAuto bool
+	agentsFile     string
+	agentsDirty    bool
+	agentCursor    int
+	editName       textinput.Model
 
 	sectionsView  viewport.Model
 	keysView      viewport.Model
 	agentsView    viewport.Model
-	pickerView    viewport.Model
 	width, height int
 	helpModel     help.Model
 	helpKM        tui.KeyMap
@@ -107,7 +100,6 @@ func newConfigModel(cfg *hujson.Value, configFile, configD string) configModel {
 		sectionsView: viewport.New(0, 0),
 		keysView:     viewport.New(0, 0),
 		agentsView:   viewport.New(0, 0),
-		pickerView:   viewport.New(0, 0),
 		helpModel:    tui.NewHelpModel(),
 		helpKM:       tui.ListKeyMap,
 
@@ -140,11 +132,6 @@ func newConfigModel(cfg *hujson.Value, configFile, configD string) configModel {
 	m.editName.Placeholder = "agent-name"
 	m.editName.CharLimit = 64
 	m.editName.Width = 40
-
-	m.modelFilter = textinput.New()
-	m.modelFilter.Placeholder = "Filter models..."
-	m.modelFilter.CharLimit = 50
-	m.modelFilter.Width = 40
 
 	// Load agents from file if exists
 	if data, err := os.ReadFile(m.agentsFile); err == nil {
@@ -179,9 +166,6 @@ func newConfigModel(cfg *hujson.Value, configFile, configD string) configModel {
 		}
 	}
 
-	// Initialize models list for picker
-	m.loadModelsFromAgents()
-
 	return m
 }
 
@@ -199,6 +183,8 @@ func (m configModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sectionsView.Height = h
 		m.keysView.Width = msg.Width - 6
 		m.keysView.Height = h
+		m.agentsView.Width = msg.Width - 6
+		m.agentsView.Height = h
 
 	case tea.KeyMsg:
 		switch m.screen {
@@ -218,9 +204,6 @@ func (m configModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.editInput, _ = m.editInput.Update(msg)
 	case screenAgents:
 		m.editName, _ = m.editName.Update(msg)
-		if m.modelFilterFocused {
-			m.modelFilter, _ = m.modelFilter.Update(msg)
-		}
 	}
 
 	return m, nil
@@ -298,15 +281,6 @@ func (m *configModel) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *configModel) loadModelsFromAgents() {
-	sort.Slice(agents.Models, func(i, j int) bool {
-		if agents.Models[i].Provider != agents.Models[j].Provider {
-			return agents.Models[i].Provider < agents.Models[j].Provider
-		}
-		return agents.Models[i].ID < agents.Models[j].ID
-	})
-}
-
 func (m *configModel) updateAgents(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "q":
@@ -321,6 +295,11 @@ func (m *configModel) updateAgents(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.saved = true
 		m.agentsDirty = false
 		return m, tea.Quit
+	case " ":
+		m.agentsModeAuto = !m.agentsModeAuto
+		m.agentsDirty = true
+		m.updateAgentsContent()
+		return m, nil
 	case "enter":
 		m.startEditAgent()
 		return m, nil
@@ -408,6 +387,24 @@ func (m *configModel) startEdit(idx int) {
 }
 
 func (m *configModel) applyEdit() {
+	// Handle agent name editing
+	if m.editKey == "agent_name" && m.agentCursor >= 0 && m.agentCursor < len(m.agents) {
+		name := m.editInput.Value()
+		if name == "" {
+			// Remove empty agent
+			m.agents = append(m.agents[:m.agentCursor], m.agents[m.agentCursor+1:]...)
+			if m.agentCursor >= len(m.agents) && m.agentCursor > 0 {
+				m.agentCursor--
+			}
+		} else {
+			m.agents[m.agentCursor].Name = name
+		}
+		m.agentsDirty = true
+		m.screen = screenAgents
+		m.updateAgentsContent()
+		return
+	}
+
 	if len(m.entries) == 0 {
 		return
 	}
@@ -424,8 +421,8 @@ func (m *configModel) applyEdit() {
 
 	entry.Value.Value = parseLiteralValue(raw)
 
-	// Mark the source file as dirty
-	if src, ok := m.sources[entry.Key]; ok {
+	// Mark the source file as dirty using the active section (top-level key)
+	if src, ok := m.sources[m.activeSection]; ok {
 		m.dirty[src.filePath] = true
 	}
 }
@@ -747,19 +744,12 @@ type EditorResult struct {
 }
 
 func (m *configModel) startEditAgent() {
-	m.screen = screenEdit
-	m.editCursor = 0
-	m.editName.SetValue("")
 	if m.agentCursor >= 0 && m.agentCursor < len(m.agents) {
+		// For now, agent editing is simplified - just edit the name
+		m.screen = screenEdit
 		m.editName.SetValue(m.agents[m.agentCursor].Name)
-	}
-	m.editName.Focus()
-
-	for i, s := range agents.Strategies {
-		if m.agentCursor >= 0 && m.agentCursor < len(m.agents) && m.agents[m.agentCursor].Strategy == s {
-			m.strategyIdx = i
-			break
-		}
+		m.editName.Focus()
+		m.editKey = "agent_name" // Marker for agent editing
 	}
 }
 
