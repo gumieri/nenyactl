@@ -108,18 +108,21 @@ func init() {
 
 func runConfigEdit(cmd *cobra.Command, args []string) error {
 	var configFile string
+	var configD string
 
 	if configEditDir != "" {
 		if _, statErr := os.Stat(configEditDir); statErr != nil {
 			return fmt.Errorf("--dir: %w", statErr)
 		}
 		configFile = configEditDir + "/config.json"
+		configD = configEditDir
 	} else {
 		info, err := detect.Detect()
 		if err != nil {
 			return err
 		}
 		configFile = info.ConfigFile
+		configD = info.ConfigD
 	}
 
 	if _, err := os.Stat(configFile); err != nil {
@@ -128,7 +131,7 @@ func runConfigEdit(cmd *cobra.Command, args []string) error {
 
 	fmt.Println(infoStyle.Render("›"), "Editing:", configFile)
 
-	edited, changed, err := config.RunConfigEditor(configFile)
+	result, changed, err := config.RunConfigEditor(configFile, configD)
 	if err != nil {
 		return fmt.Errorf("editor: %w", err)
 	}
@@ -138,10 +141,17 @@ func runConfigEdit(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	if err := jsonc.WriteFile(configFile, edited, 0o644); err != nil {
+	if err := jsonc.WriteFile(result.ConfigFile, result.Config, 0o644); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
+	fmt.Println(successStyle.Render("✓"), "Config saved:", result.ConfigFile)
 
-	fmt.Println(successStyle.Render("✓"), "Config saved:", configFile)
+	if dirty, ok := result.Dirty[result.AgentsFile]; ok && dirty {
+		if err := config.WriteAgentsFile(result.AgentsFile, result.Agents); err != nil {
+			return fmt.Errorf("save agents: %w", err)
+		}
+		fmt.Println(successStyle.Render("✓"), "Agents saved:", result.AgentsFile)
+	}
+
 	return nil
 }

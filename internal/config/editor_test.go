@@ -56,7 +56,7 @@ func TestNewConfigModel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg)
+	m := newConfigModel(cfg, "/tmp/config.json", t.TempDir())
 	if len(m.sections) == 0 {
 		t.Error("expected non-empty sections")
 	}
@@ -71,12 +71,12 @@ func TestLoadSection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg)
+	m := newConfigModel(cfg, "/tmp/config.json", t.TempDir())
 	if len(m.sections) == 0 {
 		t.Fatal("no sections")
 	}
 
-	m.loadSection(m.sections[0])
+	m.loadSection(m.sections[0].name)
 	if len(m.entries) == 0 {
 		t.Error("expected non-empty entries for first section")
 	}
@@ -94,7 +94,7 @@ func TestApplyEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg)
+	m := newConfigModel(cfg, path, t.TempDir())
 	m.loadSection("governance")
 	if len(m.entries) == 0 {
 		t.Fatal("expected entries")
@@ -126,7 +126,7 @@ func TestApplyEditPreservesComments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg)
+	m := newConfigModel(cfg, path, t.TempDir())
 	m.loadSection("governance")
 	m.cursor = 0
 	m.editInput.SetValue("500000")

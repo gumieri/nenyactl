@@ -33,6 +33,14 @@ func memberName(m *hujson.ObjectMember) string {
 	return m.Name.Value.(hujson.Literal).String()
 }
 
+func MemberName(m *hujson.ObjectMember) string {
+	return memberName(m)
+}
+
+func AsObject(v *hujson.Value) (*hujson.Object, bool) {
+	return GetObject(v)
+}
+
 func GetObject(v *hujson.Value) (*hujson.Object, bool) {
 	obj, ok := v.Value.(*hujson.Object)
 	return obj, ok
