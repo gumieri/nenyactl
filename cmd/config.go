@@ -128,9 +128,14 @@ func runConfigEdit(cmd *cobra.Command, args []string) error {
 
 	fmt.Println(infoStyle.Render("›"), "Editing:", configFile)
 
-	edited, err := config.RunConfigEditor(configFile)
+	edited, changed, err := config.RunConfigEditor(configFile)
 	if err != nil {
 		return fmt.Errorf("editor: %w", err)
+	}
+
+	if !changed {
+		fmt.Println(infoStyle.Render("›"), "No changes made")
+		return nil
 	}
 
 	if err := jsonc.WriteFile(configFile, edited, 0o644); err != nil {

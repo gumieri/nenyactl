@@ -445,10 +445,10 @@ func isSectionObject(v *hujson.Value) bool {
 	return ok
 }
 
-func RunConfigEditor(configFile string) (*hujson.Value, error) {
+func RunConfigEditor(configFile string) (*hujson.Value, bool, error) {
 	cfg, err := jsonc.ReadFile(configFile)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	m := newConfigModel(cfg)
@@ -458,19 +458,19 @@ func RunConfigEditor(configFile string) (*hujson.Value, error) {
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	result, err := p.Run()
 	if err != nil {
-		return cfg, err
+		return cfg, false, err
 	}
 
 	tm, ok := result.(configModel)
 	if !ok {
-		return cfg, nil
+		return cfg, false, nil
 	}
 
 	if tm.quit || !tm.saved {
-		return cfg, nil
+		return cfg, false, nil
 	}
 
-	return tm.config, nil
+	return tm.config, true, nil
 }
 
 func (m *configModel) loadDefaults() {
