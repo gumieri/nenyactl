@@ -4,3 +4,8 @@ bin/
 *.test
 coverage.out
 .env
+
+# Local agent/tool config may hold credentials (e.g. Plane API key).
+# Defense-in-depth: .opencode/.gitignore already ignores everything.
+.opencode/opencode.json
+.opencode/node_modules/
