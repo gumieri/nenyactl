@@ -12,16 +12,16 @@ import (
 
 // fakeCmd implements cmdRunner.
 type fakeCmd struct {
-	dir     string
-	stdout  io.Writer
-	stderr  io.Writer
-	runFn   func() error
+	dir    string
+	stdout io.Writer
+	stderr io.Writer
+	runFn  func() error
 }
 
-func (f *fakeCmd) Dir(dir string) cmdRunner   { f.dir = dir; return f }
+func (f *fakeCmd) Dir(dir string) cmdRunner     { f.dir = dir; return f }
 func (f *fakeCmd) Stdout(w io.Writer) cmdRunner { f.stdout = w; return f }
 func (f *fakeCmd) Stderr(w io.Writer) cmdRunner { f.stderr = w; return f }
-func (f *fakeCmd) Run() error                    { return f.runFn() }
+func (f *fakeCmd) Run() error                   { return f.runFn() }
 
 // fakeExec implements execer.
 type fakeExec struct {

@@ -25,10 +25,10 @@ type Theme struct {
 	InputFocused lipgloss.Style
 	InputBlurred lipgloss.Style
 
-	Border          lipgloss.Border
-	BorderColor     lipgloss.Style
-	BorderFocused   lipgloss.Border
-	BorderColorFoc  lipgloss.Style
+	Border         lipgloss.Border
+	BorderColor    lipgloss.Style
+	BorderFocused  lipgloss.Border
+	BorderColorFoc lipgloss.Style
 
 	App lipgloss.Style
 }

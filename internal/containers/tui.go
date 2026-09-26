@@ -128,10 +128,10 @@ func newTUIModel() tuiModel {
 	customKey.Width = 50
 
 	return tuiModel{
-		screen:    screenSelect,
-		providers: BuiltinProviders,
-		selected:  make(map[int]bool),
-		table:     t,
+		screen:      screenSelect,
+		providers:   BuiltinProviders,
+		selected:    make(map[int]bool),
+		table:       t,
 		customName:  customName,
 		customKey:   customKey,
 		customFocus: 0,

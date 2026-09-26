@@ -20,13 +20,13 @@ func NewHelpModel() help.Model {
 	m := help.New()
 	theme := Current()
 	m.Styles = help.Styles{
-		ShortKey:        theme.Dimmed,
-		ShortDesc:       theme.Body,
-		ShortSeparator:  theme.Dimmed,
-		FullKey:         theme.Dimmed,
-		FullDesc:        theme.Body,
-		FullSeparator:   theme.Dimmed,
-		Ellipsis:        theme.Dimmed,
+		ShortKey:       theme.Dimmed,
+		ShortDesc:      theme.Body,
+		ShortSeparator: theme.Dimmed,
+		FullKey:        theme.Dimmed,
+		FullDesc:       theme.Body,
+		FullSeparator:  theme.Dimmed,
+		Ellipsis:       theme.Dimmed,
 	}
 	return m
 }

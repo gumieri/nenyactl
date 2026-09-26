@@ -23,8 +23,8 @@ The binary is installed to /usr/local/bin (system) or ~/.local/bin (user).`,
 }
 
 var (
-	installUser      bool
-	installSkipSvc  bool
+	installUser    bool
+	installSkipSvc bool
 )
 
 func init() {
@@ -42,9 +42,9 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	}
 
 	cfg := install.Config{
-		UserInstall:  installUser,
-		Version:      version,
-		SkipService:  installSkipSvc,
+		UserInstall: installUser,
+		Version:     version,
+		SkipService: installSkipSvc,
 	}
 
 	if err := install.Install(ctx, cfg); err != nil {

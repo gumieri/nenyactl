@@ -48,7 +48,7 @@ func createTarGz(t *testing.T, files map[string]string) string {
 func TestUntar(t *testing.T) {
 	t.Run("extracts regular files", func(t *testing.T) {
 		src := createTarGz(t, map[string]string{
-			"nenya":         "binary-content",
+			"nenya":          "binary-content",
 			"deploy/service": "[Unit]\nDescription=nenya",
 		})
 		dst := t.TempDir()

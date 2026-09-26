@@ -156,4 +156,3 @@ func TestContainersTUI_CustomScreen(t *testing.T) {
 		}
 	})
 }
-
