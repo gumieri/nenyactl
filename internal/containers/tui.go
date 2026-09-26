@@ -144,7 +144,7 @@ func (m tuiModel) Init() tea.Cmd {
 	return nil
 }
 
-func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
@@ -248,6 +248,9 @@ func (m *tuiModel) updateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *tuiModel) updateCustom(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "ctrl+c":
+		m.quitting = true
+		return m, tea.Quit
 	case "esc":
 		m.screen = screenSelect
 		return m, nil
@@ -282,9 +285,13 @@ func (m *tuiModel) updateCustom(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *tuiModel) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+c", "esc":
+	case "ctrl+c":
 		m.quitting = true
 		return m, tea.Quit
+
+	case "esc":
+		m.screen = screenSelect
+		return m, nil
 
 	case "enter":
 		m.quitting = true
@@ -488,12 +495,13 @@ func (m tuiModel) Results() map[string]string {
 }
 
 func CollectProviderKeys() (map[string]string, error) {
-	p := tea.NewProgram(newTUIModel(), tea.WithAltScreen())
-	m, err := p.Run()
+	m := newTUIModel()
+	p := tea.NewProgram(&m, tea.WithAltScreen())
+	result, err := p.Run()
 	if err != nil {
 		return nil, err
 	}
-	if model, ok := m.(tuiModel); ok {
+	if model, ok := result.(*tuiModel); ok {
 		return model.Results(), nil
 	}
 	return nil, nil

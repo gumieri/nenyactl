@@ -171,7 +171,7 @@ func newConfigModel(cfg *hujson.Value, configFile, configD string) configModel {
 
 func (m configModel) Init() tea.Cmd { return nil }
 
-func (m configModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *configModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -794,13 +794,13 @@ func RunConfigEditor(configFile, configD string) (*EditorResult, bool, error) {
 	m.loadDefaults()
 	m.updateSectionsContent()
 
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(&m, tea.WithAltScreen())
 	result, err := p.Run()
 	if err != nil {
 		return nil, false, err
 	}
 
-	tm, ok := result.(configModel)
+	tm, ok := result.(*configModel)
 	if !ok {
 		return nil, false, nil
 	}

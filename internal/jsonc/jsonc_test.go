@@ -243,3 +243,68 @@ func TestFieldValueString(t *testing.T) {
 		}
 	})
 }
+
+func TestGetObject(t *testing.T) {
+	t.Run("extracts object value", func(t *testing.T) {
+		v := hujson.Value{Value: &hujson.Object{}}
+		obj, ok := GetObject(&v)
+		if !ok {
+			t.Fatal("expected true for object")
+		}
+		if obj == nil {
+			t.Fatal("expected non-nil object")
+		}
+	})
+
+	t.Run("returns false for non-object", func(t *testing.T) {
+		v := hujson.Value{Value: hujson.Literal("string")}
+		_, ok := GetObject(&v)
+		if ok {
+			t.Error("expected false for non-object")
+		}
+	})
+}
+
+func TestEnsureNestedObject(t *testing.T) {
+	v, err := hujson.Parse([]byte(`{"a": {"b": {"c": 1}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("valid nested object path", func(t *testing.T) {
+		obj, ok := EnsureNestedObject(&v, []string{"a", "b"})
+		if !ok {
+			t.Fatal("expected true for valid path")
+		}
+		if obj == nil {
+			t.Fatal("expected non-nil object")
+		}
+	})
+
+	t.Run("path ends at non-object", func(t *testing.T) {
+		_, ok := EnsureNestedObject(&v, []string{"a", "b", "c"})
+		if ok {
+			t.Error("expected false when path ends at non-object")
+		}
+	})
+
+	t.Run("missing key in path", func(t *testing.T) {
+		_, ok := EnsureNestedObject(&v, []string{"nonexistent", "b"})
+		if ok {
+			t.Error("expected false for missing key")
+		}
+	})
+}
+
+func TestWriteFileErrorCases(t *testing.T) {
+	t.Run("write fails with bad path", func(t *testing.T) {
+		v, err := hujson.Parse([]byte(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = WriteFile("/nonexistent/dir/config.json", &v, 0o644)
+		if err == nil {
+			t.Error("expected error for bad path")
+		}
+	})
+}

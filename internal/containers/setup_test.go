@@ -20,13 +20,25 @@ func TestSetup(t *testing.T) {
 		}
 
 		configDir := filepath.Join(tmp, "config")
+		secretsDir := filepath.Join(tmp, "secrets")
+		composePath := filepath.Join(tmp, "compose.yml")
+		envPath := filepath.Join(tmp, ".env")
+
 		if _, err := os.Stat(configDir); os.IsNotExist(err) {
 			t.Error("config directory not created")
 		}
-
-		secretsDir := filepath.Join(tmp, "secrets")
 		if _, err := os.Stat(secretsDir); os.IsNotExist(err) {
 			t.Error("secrets directory not created")
+		}
+		if _, err := os.Stat(composePath); os.IsNotExist(err) {
+			t.Error("compose.yml not created")
+		}
+		if _, err := os.Stat(envPath); os.IsNotExist(err) {
+			t.Error(".env not created")
+		}
+
+		if info, err := os.Stat(secretsDir); err == nil && info.Mode().Perm() != 0o700 {
+			t.Errorf("secrets directory has wrong permissions: %o", info.Mode().Perm())
 		}
 	})
 

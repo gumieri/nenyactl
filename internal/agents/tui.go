@@ -92,7 +92,7 @@ func (m tuiModel) Init() tea.Cmd {
 	return nil
 }
 
-func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
@@ -743,13 +743,14 @@ func trunc(s string, max int) string {
 }
 
 func RunAgentEditor() (bool, map[string]any, error) {
-	p := tea.NewProgram(newTUIModel(), tea.WithAltScreen())
-	m, err := p.Run()
+	m := newTUIModel()
+	p := tea.NewProgram(&m, tea.WithAltScreen())
+	result, err := p.Run()
 	if err != nil {
 		return false, nil, err
 	}
 
-	tm, ok := m.(tuiModel)
+	tm, ok := result.(*tuiModel)
 	if !ok {
 		return false, nil, nil
 	}

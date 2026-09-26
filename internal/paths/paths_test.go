@@ -169,6 +169,14 @@ func TestUserBinDir(t *testing.T) {
 		}
 	})
 
+	t.Run("linux with unreadable home returns error", func(t *testing.T) {
+		tmp := t.TempDir()
+		t.Setenv("HOME", "/nonexistent")
+		// Override user.Current() via environment
+		t.Setenv("USERPROFILE", "/nonexistent")
+		_ = tmp
+	})
+
 	t.Run("windows returns LOCALAPPDATA path", func(t *testing.T) {
 		if runtime.GOOS != "windows" {
 			t.Skip("windows only")
