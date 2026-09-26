@@ -85,6 +85,12 @@ assume a `target` command exists. Nenya's `contract_version` is surfaced by
 `version --json` / `describe --json`; declare the supported range and fail fast
 with an actionable message outside it (`SupportedContract = [1, 1]`).
 
+`version --json` and the bare `--version` are implemented in nenya `main`
+(unreleased as of 2026-09-26) and ship in the next release; keep feature-detecting
+them on released binaries. `nenya --version` prints the bare version string and
+exits 0 — use it for install-time version comparison instead of parsing output
+or probing for the flag's absence.
+
 ## 4. Contract facts nenyactl must honor
 
 These are copied verbatim in intent from `CONTRACT.md` and must not drift:
@@ -116,6 +122,17 @@ These are copied verbatim in intent from `CONTRACT.md` and must not drift:
   Directory mode wins over `config.json` when `config.d/` has at least one
   `*.json` (excluding `secrets.json`). The XOR is being revised; treat
   `nenya describe` as the authority.
+  - **Write hazard (read before any config edit):** creating *any*
+    `config.d/*.json` makes nenya ignore an existing `config.json` entirely.
+    Do not write a drop-in when `config.json` is present. (This is the live
+    defect behind NCTL "Fix config.d precedence inverted".)
+  - The directory merge currently drops some `governance.*` sub-sections
+    (`injection`, `spotlight`, `exfil_guard`, `canary`, `param_compat`). A
+    successful write is therefore **not** proof the setting applies — re-read
+    `nenya describe` (or the file the layout actually uses) and report which
+    file was written.
+  - Prefer `nenya config set` / `nenya secret set` (target) once they ship;
+    until then edit the single file the detected layout uses and say so.
 - **Service units**: systemd `nenya.service` (+ `nenya.socket`); launchd
   `nenya.plist`, label `com.gumieri.nenya`. The shipped systemd unit wires
   secrets with `LoadCredential=secrets:/etc/nenya/secrets.json`. Regenerate with
