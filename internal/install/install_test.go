@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,9 +23,13 @@ func containTarGz(t *testing.T, files map[string]string) []byte {
 	tarW := tar.NewWriter(gzW)
 
 	for name, content := range files {
+		mode := int64(0o644)
+		if name == "nenya" || strings.HasSuffix(name, ".service") || strings.HasSuffix(name, ".socket") {
+			mode = 0o755
+		}
 		hdr := &tar.Header{
 			Name: name,
-			Mode: 0o755,
+			Mode: mode,
 			Size: int64(len(content)),
 		}
 		if err := tarW.WriteHeader(hdr); err != nil {
@@ -39,40 +45,80 @@ func containTarGz(t *testing.T, files map[string]string) []byte {
 	return buf.Bytes()
 }
 
-func TestDownloadURL(t *testing.T) {
-	t.Run("constructs correct URL for current OS/arch", func(t *testing.T) {
-		url := downloadURL("v1.0.0")
-		if !strings.Contains(url, "github.com") {
-			t.Error("URL should contain github.com")
-		}
-		if !strings.Contains(url, "gumieri") {
-			t.Error("URL should contain owner")
-		}
-		if !strings.Contains(url, "nenya") {
-			t.Error("URL should contain repo name")
-		}
-		if !strings.Contains(url, "v1.0.0") {
-			t.Error("URL should contain version")
-		}
-		if !strings.Contains(url, runtime.GOOS) {
-			t.Error("URL should contain OS")
-		}
-		if !strings.Contains(url, runtime.GOARCH) {
-			t.Error("URL should contain arch")
-		}
-		if !strings.HasSuffix(url, ".tar.gz") {
-			t.Error("URL should end with .tar.gz")
-		}
-	})
+// releaseServer serves a synthetic but realistically named release: the archive
+// plus checksums.txt (with the real SHA-256) and a cosign bundle stub.
+func releaseServer(t *testing.T, archive []byte, tag string) *httptest.Server {
+	t.Helper()
+	name := archiveFilename(tag, runtime.GOOS, runtime.GOARCH)
+	sum := sha256.Sum256(archive)
 
-	t.Run("URL format is correct", func(t *testing.T) {
-		url := downloadURL("v0.2.0")
-		expected := "https://github.com/gumieri/nenya/releases/download/v0.2.0/nenya_" +
-			"v0.2.0_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz"
-		if url != expected {
-			t.Errorf("downloadURL() = %q, want %q", url, expected)
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "checksums.txt.sigstore.json"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+		case strings.HasSuffix(r.URL.Path, "checksums.txt"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, "%x  %s\n", sum, name)
+		case strings.HasSuffix(r.URL.Path, ".tar.gz"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(archive)
+		default:
+			w.WriteHeader(http.StatusNotFound)
 		}
-	})
+	}))
+}
+
+func pointAtServer(t *testing.T, server *httptest.Server) {
+	t.Helper()
+	saved := assetBaseURL
+	assetBaseURL = func(string) string { return server.URL + "/" }
+	t.Cleanup(func() { assetBaseURL = saved })
+}
+
+// fakeRunner is a CommandRunner for tests. It fails unless the command is
+// allowlisted, so `cosign version` can be simulated.
+type fakeRunner struct {
+	available map[string]bool
+}
+
+func (f fakeRunner) Output(_ context.Context, name string, args ...string) ([]byte, error) {
+	key := strings.Join(append([]string{name}, args...), " ")
+	if f.available[key] {
+		return []byte("ok"), nil
+	}
+	return nil, fmt.Errorf("command not found: %s", key)
+}
+
+func TestArchiveFilename(t *testing.T) {
+	cases := []struct {
+		tag, os, arch, want string
+	}{
+		{"v0.15.0", "linux", "arm64", "nenya_0.15.0_linux_arm64.tar.gz"},
+		{"v0.15.0", "darwin", "amd64", "nenya_0.15.0_darwin_amd64.tar.gz"},
+		{"0.15.0", "linux", "amd64", "nenya_0.15.0_linux_amd64.tar.gz"},
+	}
+	for _, c := range cases {
+		if got := archiveFilename(c.tag, c.os, c.arch); got != c.want {
+			t.Errorf("archiveFilename(%q,%q,%q) = %q, want %q", c.tag, c.os, c.arch, got, c.want)
+		}
+	}
+}
+
+func TestDownloadURL(t *testing.T) {
+	tag := "v0.2.0"
+	url := downloadURL(tag)
+	want := "https://github.com/gumieri/nenya/releases/download/v0.2.0/nenya_0.2.0_" +
+		runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz"
+	if url != want {
+		t.Errorf("downloadURL() = %q, want %q", url, want)
+	}
+	if got := checksumsURL(tag); !strings.HasSuffix(got, "/v0.2.0/checksums.txt") {
+		t.Errorf("checksumsURL() = %q", got)
+	}
+	if got := sigstoreBundleURL(tag); !strings.HasSuffix(got, "/v0.2.0/checksums.txt.sigstore.json") {
+		t.Errorf("sigstoreBundleURL() = %q", got)
+	}
 }
 
 func TestCopyFile(t *testing.T) {
@@ -198,27 +244,22 @@ func TestDownload(t *testing.T) {
 }
 
 func TestInstall(t *testing.T) {
-	tarGz := containTarGz(t, map[string]string{
-		"nenya": "fake-binary-content",
+	archive := containTarGz(t, map[string]string{
+		"nenya":                "fake-binary-content",
+		"deploy/nenya.service": "[Unit]\nDescription=nenya",
+		"deploy/nenya.socket":  "[Socket]\nListenStream=8080",
 	})
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(tarGz)
-	}))
+	server := releaseServer(t, archive, "v0.0.0-test")
 	defer server.Close()
-
-	savedDownloadURL := downloadURL
-	downloadURL = func(version string) string { return server.URL + "/download" }
-	t.Cleanup(func() { downloadURL = savedDownloadURL })
+	pointAtServer(t, server)
 
 	tmp := t.TempDir()
 	cfg := Config{
 		UserInstall: true,
 		Version:     "v0.0.0-test",
 		SkipService: true,
+		SkipVerify:  true,
 	}
-
 	t.Setenv("HOME", tmp)
 
 	if err := Install(context.Background(), cfg); err != nil {
@@ -263,34 +304,25 @@ func TestDownloadErrorPaths(t *testing.T) {
 }
 
 func TestInstallWithHTTP(t *testing.T) {
-	tarGz := containTarGz(t, map[string]string{
+	archive := containTarGz(t, map[string]string{
 		"nenya": "fake-binary-content",
 	})
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(tarGz)
-	}))
+	server := releaseServer(t, archive, "v0.0.0-test")
 	defer server.Close()
-
-	savedDownloadURL := downloadURL
-	downloadURL = func(version string) string { return server.URL + "/download" }
-	t.Cleanup(func() { downloadURL = savedDownloadURL })
+	pointAtServer(t, server)
 
 	tmp := t.TempDir()
 	cfg := Config{
 		UserInstall: true,
 		Version:     "v0.0.0-test",
+		SkipVerify:  true,
 	}
-
-	// Set HOME to tmp so ~/.local/bin resolves inside tmp
 	t.Setenv("HOME", tmp)
 
 	if err := InstallWithHTTP(context.Background(), cfg, server.Client()); err != nil {
 		t.Fatalf("InstallWithHTTP() error = %v", err)
 	}
 
-	// Should NOT be installed to /usr/local/bin (UserInstall=true, but HOME points to tmp)
 	installedPath := filepath.Join(tmp, ".local", "bin", "nenya")
 	if _, err := os.Stat(installedPath); os.IsNotExist(err) {
 		t.Fatalf("nenya binary not found at %s", installedPath)
@@ -307,17 +339,15 @@ func TestInstallWithHTTP(t *testing.T) {
 
 func TestInstallWithHTTPWindowsError(t *testing.T) {
 	t.Run("returns Windows-specific error", func(t *testing.T) {
-		tarGz := containTarGz(t, map[string]string{"nenya": "data"})
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_, _ = w.Write(tarGz)
-		}))
-		defer server.Close()
-
 		if runtime.GOOS != "windows" {
 			t.Skip("skipping Windows-only test")
 		}
+		archive := containTarGz(t, map[string]string{"nenya": "data"})
+		server := releaseServer(t, archive, "v0.0.0")
+		defer server.Close()
+		pointAtServer(t, server)
 
-		err := InstallWithHTTP(context.Background(), Config{}, server.Client())
+		err := InstallWithHTTPAndRunner(context.Background(), Config{}, server.Client(), fakeRunner{})
 		if err == nil {
 			t.Fatal("expected error on Windows")
 		}

@@ -23,14 +23,16 @@ The binary is installed to /usr/local/bin (system) or ~/.local/bin (user).`,
 }
 
 var (
-	installUser    bool
-	installSkipSvc bool
+	installUser       bool
+	installSkipSvc    bool
+	installSkipVerify bool
 )
 
 func init() {
 	rootCmd.AddCommand(installCmd)
 	installCmd.Flags().BoolVar(&installUser, "user", false, "Install to user bin dir instead of system-wide")
 	installCmd.Flags().BoolVar(&installSkipSvc, "skip-service", false, "Install binary only, skip service configuration")
+	installCmd.Flags().BoolVar(&installSkipVerify, "skip-verify", false, "Skip checksum and cosign verification (NOT recommended)")
 }
 
 func runInstall(cmd *cobra.Command, args []string) error {
@@ -45,6 +47,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		UserInstall: installUser,
 		Version:     version,
 		SkipService: installSkipSvc,
+		SkipVerify:  installSkipVerify,
 	}
 
 	if err := install.Install(ctx, cfg); err != nil {

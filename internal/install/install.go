@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // HTTPDoer is the interface for making HTTP requests.
@@ -22,10 +23,19 @@ const (
 	confDir = "/etc/nenya"
 )
 
+// Config controls an installation.
 type Config struct {
 	UserInstall bool
 	Version     string
 	SkipService bool
+	// SkipVerify disables SHA-256 + cosign verification. It exists only for
+	// offline/air-gapped workflows that verify out of band; installing an
+	// unverified binary is a contract violation (CONTRACT.md §7.2).
+	SkipVerify bool
+	// CosignIdentityRegexp overrides the expected cosign keyless identity.
+	CosignIdentityRegexp string
+	// CosignIssuer overrides the expected cosign OIDC issuer.
+	CosignIssuer string
 }
 
 func Install(ctx context.Context, cfg Config) error {
@@ -33,29 +43,40 @@ func Install(ctx context.Context, cfg Config) error {
 }
 
 func InstallWithHTTP(ctx context.Context, cfg Config, hc HTTPDoer) error {
+	return InstallWithHTTPAndRunner(ctx, cfg, hc, defaultRunner)
+}
+
+// InstallWithHTTPAndRunner installs nenya, injecting the HTTP client and the
+// command runner used for signature verification and service management.
+func InstallWithHTTPAndRunner(ctx context.Context, cfg Config, hc HTTPDoer, runner CommandRunner) error {
 	if runtime.GOOS == "windows" {
 		return fmt.Errorf("bare-metal installation is not supported on Windows; use 'nenyactl containers setup' instead")
 	}
 
-	version := cfg.Version
-	if version == "" {
+	tag := cfg.Version
+	if tag == "" {
 		var err error
-		version, err = FetchLatestVersionWithHTTP(ctx, hc)
+		tag, err = FetchLatestVersionWithHTTP(ctx, hc)
 		if err != nil {
 			return fmt.Errorf("fetch latest version: %w", err)
 		}
 	}
 
-	url := downloadURL(version)
+	archiveName := archiveFilename(tag, runtime.GOOS, runtime.GOARCH)
+
 	tmpDir, err := os.MkdirTemp("", "nenyactl-*")
 	if err != nil {
 		return fmt.Errorf("create temp dir: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
-	archive := filepath.Join(tmpDir, "nenya.tar.gz")
-	if err := downloadWith(ctx, url, archive, hc); err != nil {
+	archivePath := filepath.Join(tmpDir, archiveName)
+	if err := downloadWith(ctx, downloadURL(tag), archivePath, hc); err != nil {
 		return fmt.Errorf("download nenya: %w", err)
+	}
+
+	if err := verifyDownload(ctx, cfg, hc, runner, tag, archiveName, archivePath, tmpDir); err != nil {
+		return err
 	}
 
 	extractDir := filepath.Join(tmpDir, "extract")
@@ -63,11 +84,11 @@ func InstallWithHTTP(ctx context.Context, cfg Config, hc HTTPDoer) error {
 		return fmt.Errorf("create extract dir: %w", err)
 	}
 
-	if err := untar(archive, extractDir); err != nil {
+	if err := untar(archivePath, extractDir); err != nil {
 		return fmt.Errorf("extract archive: %w", err)
 	}
 
-	// Find binary in extracted archive (goreleaser puts it at the root)
+	// Consumers MUST extract the `nenya` member by exact name (CONTRACT.md §7.1).
 	binaryPath := filepath.Join(extractDir, "nenya")
 	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
 		return fmt.Errorf("nenya binary not found in archive at expected path %s", binaryPath)
@@ -95,7 +116,7 @@ func InstallWithHTTP(ctx context.Context, cfg Config, hc HTTPDoer) error {
 		return fmt.Errorf("install binary: %w", err)
 	}
 
-	fmt.Printf("Installed nenya %s to %s\n", version, dest)
+	fmt.Printf("Installed nenya %s to %s\n", tag, dest)
 
 	if !cfg.SkipService {
 		if err := installServiceFiles(extractDir); err != nil {
@@ -104,6 +125,42 @@ func InstallWithHTTP(ctx context.Context, cfg Config, hc HTTPDoer) error {
 		}
 	}
 
+	return nil
+}
+
+// verifyDownload verifies the archive's SHA-256 against checksums.txt and, when
+// `checksums.txt.sigstore.json` is present, verifies the checksums file with
+// cosign. Verification happens before extraction or installation.
+func verifyDownload(ctx context.Context, cfg Config, hc HTTPDoer, runner CommandRunner, tag, archiveName, archivePath, workDir string) error {
+	checksumsPath := filepath.Join(workDir, "checksums.txt")
+	if err := downloadWith(ctx, checksumsURL(tag), checksumsPath, hc); err != nil {
+		return fmt.Errorf("download checksums.txt: %w", err)
+	}
+
+	data, err := os.ReadFile(checksumsPath)
+	if err != nil {
+		return fmt.Errorf("read checksums.txt: %w", err)
+	}
+	want, err := checksumFor(parseChecksums(data), archiveName)
+	if err != nil {
+		return err
+	}
+	if err := verifyFileChecksum(archivePath, want); err != nil {
+		return fmt.Errorf("verify %s: %w", archiveName, err)
+	}
+
+	if cfg.SkipVerify {
+		fmt.Fprintln(os.Stderr, "Warning: signature verification skipped (--skip-verify); integrity is not assured")
+		return nil
+	}
+
+	bundlePath := filepath.Join(workDir, "checksums.txt.sigstore.json")
+	if err := downloadWith(ctx, sigstoreBundleURL(tag), bundlePath, hc); err != nil {
+		return fmt.Errorf("download checksums.txt.sigstore.json: %w", err)
+	}
+	if err := verifySigstoreBundle(ctx, runner, checksumsPath, bundlePath, cfg.CosignIdentityRegexp, cfg.CosignIssuer); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -140,12 +197,29 @@ func copyFromExtract(extractDir string, paths map[string]string) error {
 	return nil
 }
 
-var downloadURL = func(version string) string {
-	arch := runtime.GOARCH
-	osName := runtime.GOOS
-	return fmt.Sprintf("https://github.com/%s/%s/releases/download/%s/nenya_%s_%s_%s.tar.gz",
-		owner, repo, version, version, osName, arch)
+// archiveFilename builds the release archive name for a tag. The tag keeps its
+// leading `v`; the artifact name does not (e.g. tag v0.15.0 ->
+// nenya_0.15.0_linux_amd64.tar.gz).
+func archiveFilename(tag, osName, arch string) string {
+	return fmt.Sprintf("nenya_%s_%s_%s.tar.gz", strings.TrimPrefix(tag, "v"), osName, arch)
 }
+
+// assetBaseURL is the release download prefix for a tag.
+var assetBaseURL = func(tag string) string {
+	return fmt.Sprintf("https://github.com/%s/%s/releases/download/%s/", owner, repo, tag)
+}
+
+var (
+	downloadURL = func(tag string) string {
+		return assetBaseURL(tag) + archiveFilename(tag, runtime.GOOS, runtime.GOARCH)
+	}
+	checksumsURL = func(tag string) string {
+		return assetBaseURL(tag) + "checksums.txt"
+	}
+	sigstoreBundleURL = func(tag string) string {
+		return assetBaseURL(tag) + "checksums.txt.sigstore.json"
+	}
+)
 
 func download(ctx context.Context, url, dest string) error {
 	return downloadWith(ctx, url, dest, http.DefaultClient)
