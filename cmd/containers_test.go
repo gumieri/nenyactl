@@ -43,7 +43,7 @@ func TestRunContainerStartWithExec(t *testing.T) {
 				if name != "podman" {
 					t.Errorf("expected podman, got %s", name)
 				}
-				if len(args) < 2 || args[0] != "compose" || args[1] != "up" || args[2] != "-d" {
+				if len(args) < 3 || args[0] != "compose" || args[1] != "up" || args[2] != "-d" {
 					t.Errorf("unexpected args: %v", args)
 				}
 				ran = true
@@ -263,7 +263,13 @@ func TestRunContainerSetupWithExec(t *testing.T) {
 	})
 
 	t.Run("returns error on invalid dir path", func(t *testing.T) {
-		invalidDir := "/nonexistent/invalid/path/that/does/not/exist/and/should/fail/to/create"
+		if os.Geteuid() == 0 {
+			t.Skip("running as root: any path is creatable")
+		}
+		invalidDir := filepath.Join(t.TempDir(), "readonly", "nested")
+		if err := os.MkdirAll(filepath.Dir(invalidDir), 0o500); err != nil {
+			t.Fatal(err)
+		}
 		err := runContainerSetupWithExec(nil, invalidDir, ":8080", false)
 		if err == nil {
 			t.Fatal("expected error for invalid dir, got nil")

@@ -194,6 +194,17 @@ func TestDirSemanticsConsistent(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		// config init must write the file nenya actually reads.
+		if _, stderr, err := runNenyactl(t, "config", "init", "--dir", tmp); err != nil {
+			t.Fatalf("config init --dir (container): %v\n%s", err, stderr)
+		}
+		if _, err := os.Stat(filepath.Join(tmp, "config", "config.json")); err != nil {
+			t.Errorf("expected config/config.json: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(tmp, "config.json")); err == nil {
+			t.Error("wrote a root-level config.json nenya never reads")
+		}
+
 		// secret bootstrap must land where the generated compose mounts secrets.
 		if _, stderr, err := runNenyactl(t, "secret", "bootstrap", "--dir", tmp); err != nil {
 			t.Fatalf("secret bootstrap --dir (container): %v\n%s", err, stderr)
@@ -214,7 +225,7 @@ func TestDirSemanticsConsistent(t *testing.T) {
 		}{
 			{[]string{"config", "init", "--dir", filepath.Join(base, "cfg")}, filepath.Join(base, "cfg", "config.json")},
 			// create mode writes to the resolved secrets dir with a client file.
-			{[]string{"secret", "bootstrap", "--dir", filepath.Join(base, "sec")}, filepath.Join(base, "sec", "01-client.json")},
+			{[]string{"secret", "bootstrap", "--dir", filepath.Join(base, "sec")}, filepath.Join(base, "sec", "secrets.json")},
 		} {
 			_, stderr, err := runNenyactl(t, tc.args...)
 			if err != nil {

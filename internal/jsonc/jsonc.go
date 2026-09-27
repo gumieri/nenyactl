@@ -35,13 +35,11 @@ func ParseDoc(data []byte) (*hujson.Value, error) {
 	return &v, nil
 }
 
-// Render serializes a hujson value back to JSONC bytes.
+// Render serializes a hujson value back to JSONC bytes. Pack preserves the
+// original document's formatting and comments; it does not introduce the
+// trailing commas hujson.Format emits for non-standard JSON.
 func Render(v *hujson.Value) ([]byte, error) {
-	out, err := hujson.Format(v.Pack())
-	if err != nil {
-		return nil, fmt.Errorf("format JSONC: %w", err)
-	}
-	return out, nil
+	return v.Pack(), nil
 }
 
 func WriteFile(path string, v *hujson.Value, perm os.FileMode) error {

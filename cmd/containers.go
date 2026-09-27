@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -79,6 +80,8 @@ var containerSetupCfg struct {
 	start      bool
 }
 
+var statusShowToken bool
+
 var containerSetupCmd = &cobra.Command{
 	Use:   "setup",
 	Short: "Create a Nenya container deployment",
@@ -129,12 +132,21 @@ func runContainerSetupWithExec(ex execer, dir, listenAddr string, startAfter boo
 
 	token := secrets.GenerateClientToken()
 	clientPath := filepath.Join(dir, "secrets", "01-client.json")
-	if err := os.WriteFile(clientPath, []byte(fmt.Sprintf(`{
+	if err := os.MkdirAll(filepath.Dir(clientPath), 0o700); err != nil {
+		return fmt.Errorf("create secrets dir: %w", err)
+	}
+	created, err := writeNewFile0600(clientPath, []byte(fmt.Sprintf(`{
   "client_token": "%s"
-}`, token)), 0o600); err != nil {
+}
+`, token)))
+	if err != nil {
 		return fmt.Errorf("write client secrets: %w", err)
 	}
-	fmt.Println(successStyle.Render("✓"), "Generated client token")
+	if created {
+		fmt.Println(successStyle.Render("✓"), "Generated client token")
+	} else {
+		fmt.Println(dimStyle.Render("  ∃"), "Kept existing client token")
+	}
 
 	providersPath := filepath.Join(dir, "secrets", "02-providers.json")
 	keys, err := containers.CollectProviderKeys()
@@ -143,18 +155,13 @@ func runContainerSetupWithExec(ex execer, dir, listenAddr string, startAfter boo
 		keys = nil
 	}
 	if len(keys) > 0 {
-		content := "{\n  \"provider_keys\": {\n"
-		i := 0
-		for k, v := range keys {
-			content += fmt.Sprintf(`    "%s": "%s"`, k, v)
-			i++
-			if i < len(keys) {
-				content += ","
-			}
-			content += "\n"
+		content, err := json.MarshalIndent(map[string]any{
+			"provider_keys": keys,
+		}, "", "  ")
+		if err != nil {
+			return fmt.Errorf("encode providers secrets: %w", err)
 		}
-		content += "  }\n}\n"
-		if err := os.WriteFile(providersPath, []byte(content), 0o600); err != nil {
+		if err := os.WriteFile(providersPath, append(content, '\n'), 0o600); err != nil {
 			return fmt.Errorf("write providers secrets: %w", err)
 		}
 		fmt.Println(successStyle.Render("✓"), "Saved", len(keys), "provider keys")
@@ -246,6 +253,7 @@ var containerStatusCmd = &cobra.Command{
 func init() {
 	f := containerStatusCmd.Flags()
 	f.StringVar(&containerSetupCfg.dir, "dir", "", "Container deployment directory (default: XDG_DATA_HOME/nenyactl/nenya)")
+	f.BoolVar(&statusShowToken, "show-token", false, "Print the client token")
 }
 
 func runContainerStatus(cmd *cobra.Command, _ []string) error {
@@ -286,8 +294,12 @@ func runContainerStatusWithExec(ex execer, dir string) error {
 
 	if token := containers.ClientToken(dir); token != "" {
 		fmt.Println()
-		fmt.Println(dimStyle.Render("  Client token:"))
-		fmt.Println(successStyle.Render("  Authorization: Bearer ") + token)
+		if statusShowToken {
+			fmt.Println(dimStyle.Render("  Client token:"))
+			fmt.Println(successStyle.Render("  Authorization: Bearer ") + token)
+		} else {
+			fmt.Println(dimStyle.Render("  A client token is configured; pass --show-token to print it"))
+		}
 	}
 
 	return nil

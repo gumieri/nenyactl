@@ -58,6 +58,9 @@ func (i *Info) SecretsFile() string {
 // SecretsDir returns the directory the deployment's secrets live in.
 func (i *Info) SecretsDir() string {
 	if i.Mode == ModeContainer {
+		if i.DataDir == "" {
+			return ""
+		}
 		return filepath.Join(i.DataDir, "secrets")
 	}
 	if i.ConfigFile == "" {
@@ -226,11 +229,6 @@ func ModeForDir(dir string) Mode {
 		return ModeContainer
 	}
 	return ModeBareMetal
-}
-
-// DetectFromDirAuto resolves dir's mode automatically.
-func DetectFromDirAuto(dir string) (*Info, error) {
-	return DetectFromDir(dir, ModeForDir(dir))
 }
 
 func knownBinPaths() []string {

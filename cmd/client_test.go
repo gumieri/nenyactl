@@ -161,4 +161,12 @@ func TestWriteClientConfigMerges(t *testing.T) {
 	if _, ok := root["provider"].(map[string]any)["nenya"]; !ok {
 		t.Error("nenya provider not added")
 	}
+
+	info, err := os.Stat(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("config mode = %o, want 0600", info.Mode().Perm())
+	}
 }

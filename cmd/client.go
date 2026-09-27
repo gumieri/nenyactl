@@ -119,8 +119,10 @@ func runClientAdd(cmd *cobra.Command, args []string) error {
 // effective listen address from the config file when present.
 func resolvedEndpoint(res dirResolution) (clients.Endpoint, error) {
 	port := containers.PublishedPort(res.Path)
-	if p := listenPort(res.Info.ConfigFile); p != "" {
-		port = p
+	if res.Kind == dirConfigRoot {
+		if p := listenPort(res.Info.ConfigFile); p != "" {
+			port = p
+		}
 	}
 	base := "http://localhost:" + port
 

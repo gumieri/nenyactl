@@ -343,9 +343,9 @@ func TestModeForDir(t *testing.T) {
 		if got := ModeForDir(tmp); got != ModeContainer {
 			t.Errorf("ModeForDir = %v, want container", got)
 		}
-		info, err := DetectFromDirAuto(tmp)
+		info, err := DetectFromDir(tmp, ModeForDir(tmp))
 		if err != nil {
-			t.Fatalf("DetectFromDirAuto: %v", err)
+			t.Fatalf("DetectFromDir: %v", err)
 		}
 		if info.ConfigFile != filepath.Join(tmp, "config", "config.json") {
 			t.Errorf("ConfigFile = %s", info.ConfigFile)
@@ -370,9 +370,9 @@ func TestModeForDir(t *testing.T) {
 		if got := ModeForDir(tmp); got != ModeBareMetal {
 			t.Errorf("ModeForDir = %v, want bare-metal", got)
 		}
-		info, err := DetectFromDirAuto(tmp)
+		info, err := DetectFromDir(tmp, ModeForDir(tmp))
 		if err != nil {
-			t.Fatalf("DetectFromDirAuto: %v", err)
+			t.Fatalf("DetectFromDir: %v", err)
 		}
 		if info.ConfigFile != filepath.Join(tmp, "config.json") {
 			t.Errorf("ConfigFile = %s", info.ConfigFile)

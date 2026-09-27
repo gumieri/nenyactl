@@ -52,6 +52,7 @@ func resolveInstallPaths(ctx context.Context, cfg Config, runner CommandRunner, 
 
 	dir := cfg.configDirOverride
 	configFile := ""
+	secretsDir := ""
 	if dir == "" {
 		dir = systemConfigDir()
 	}
@@ -62,9 +63,15 @@ func resolveInstallPaths(ctx context.Context, cfg Config, runner CommandRunner, 
 		if p.ConfigFile != "" {
 			configFile = p.ConfigFile
 		}
+		if p.SecretsDir != "" {
+			secretsDir = p.SecretsDir
+		}
 	}
 	if configFile == "" {
 		configFile = filepath.Join(dir, "config.json")
+	}
+	if secretsDir == "" {
+		secretsDir = dir
 	}
 
 	unitDir := cfg.unitDirOverride
@@ -75,7 +82,7 @@ func resolveInstallPaths(ctx context.Context, cfg Config, runner CommandRunner, 
 	return installPaths{
 		configDir:   dir,
 		configFile:  configFile,
-		secretsFile: filepath.Join(dir, "secrets.json"),
+		secretsFile: filepath.Join(secretsDir, "secrets.json"),
 		unitDir:     unitDir,
 	}, nil
 }

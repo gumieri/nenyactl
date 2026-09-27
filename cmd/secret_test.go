@@ -56,7 +56,7 @@ func TestRunSecretBootstrap(t *testing.T) {
 		if err != nil {
 			t.Fatalf("runSecretBootstrap() error = %v", err)
 		}
-		path := filepath.Join(tmp, "01-client.json")
+		path := filepath.Join(tmp, "secrets.json")
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Fatalf("client secrets not created: %v", err)
@@ -68,7 +68,7 @@ func TestRunSecretBootstrap(t *testing.T) {
 
 	t.Run("refuses to overwrite existing", func(t *testing.T) {
 		tmp := t.TempDir()
-		if err := os.WriteFile(filepath.Join(tmp, "01-client.json"), []byte("{}"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(tmp, "secrets.json"), []byte("{}"), 0o600); err != nil {
 			t.Fatalf("write secrets: %v", err)
 		}
 		bootstrapDir = tmp

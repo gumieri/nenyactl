@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/gumieri/nenyactl/internal/paths"
 	secrets "github.com/gumieri/nenyactl/internal/secrets"
 	"github.com/spf13/cobra"
 )
@@ -74,12 +73,12 @@ func runSecretGenerate(cmd *cobra.Command, args []string) error {
 
 var secretBootstrapCmd = &cobra.Command{
 	Use:   "bootstrap",
-	Short: "Create initial secrets file",
-	Long: `Create a secrets.json file with a generated client token
-and placeholder provider keys.
+	Short: "Create the initial client token",
+	Long: `Create the deployment's client-token file with a generated token.
 
-Default location: ` + paths.SystemConfigDir() + `/secrets.json
-Existing secrets files are NOT overwritten.`,
+Container deployments write secrets/01-client.json (mounted as
+/run/secrets/nenya); bare metal writes <config-root>/secrets.json.
+Existing files are never overwritten.`,
 	RunE: runSecretBootstrap,
 }
 
@@ -94,9 +93,7 @@ func runSecretBootstrap(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	secretsDir := res.SecretsDir()
-	secretsPath := filepath.Join(secretsDir, "01-client.json")
-
+	secretsPath := res.Info.SecretsFile()
 	newFile, err := writeNewFile0600(secretsPath, []byte(fmt.Sprintf(`{
   "client_token": "%s"
 }

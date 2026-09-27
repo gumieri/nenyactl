@@ -146,11 +146,9 @@ func MergeOpenCodeProvider(existing []byte, ep Endpoint) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	root, ok := jsonc.GetObject(v)
-	if !ok {
+	if _, ok := jsonc.GetObject(v); !ok {
 		return nil, fmt.Errorf("existing opencode.json is not a JSON object")
 	}
-	_ = root
 
 	var block map[string]any
 	if err := json.Unmarshal([]byte(snippet.Body), &block); err != nil {

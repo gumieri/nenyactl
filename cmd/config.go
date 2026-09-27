@@ -65,6 +65,8 @@ func bootstrapConfig(dir string) error {
 	if _, err := os.Stat(path); err == nil {
 		fmt.Println(dimStyle.Render("  ∃"), "Skipping existing", path)
 		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat %s: %w", path, err)
 	}
 
 	content := install.BootstrapConfigContent(context.Background(), install.NewExecRunner(), "nenya")
