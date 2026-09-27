@@ -11,11 +11,22 @@ const (
 	SupportedMax = 1
 )
 
+// UnsupportedError reports an installed contract_version outside the supported
+// range. It is typed so callers (e.g. doctor) can distinguish a range failure
+// from a command that is simply absent.
+type UnsupportedError struct {
+	Version int
+}
+
+func (e *UnsupportedError) Error() string {
+	return fmt.Sprintf("nenya contract_version %d is not supported by this nenyactl build (supports %s); update nenyactl or install a compatible nenya",
+		e.Version, Range())
+}
+
 // Check returns an actionable error when v is outside the supported range.
 func Check(v int) error {
 	if v < SupportedMin || v > SupportedMax {
-		return fmt.Errorf("nenya contract_version %d is not supported by this nenyactl build (supports %s); update nenyactl or install a compatible nenya",
-			v, Range())
+		return &UnsupportedError{Version: v}
 	}
 	return nil
 }
