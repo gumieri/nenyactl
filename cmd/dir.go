@@ -81,16 +81,6 @@ func (r dirResolution) ConfigDir() string {
 	return filepath.Dir(r.Info.ConfigFile)
 }
 
-// SecretsDir is the directory the deployment's secrets live in. Container
-// layouts use <root>/secrets (what the compose mounts as /run/secrets/nenya);
-// bare-metal uses the config root.
-func (r dirResolution) SecretsDir() string {
-	if r.Kind == dirContainerRoot {
-		return filepath.Join(r.Path, "secrets")
-	}
-	return filepath.Dir(r.Info.ConfigFile)
-}
-
 func configRoot(dir string) dirResolution {
 	return dirResolution{
 		Path: dir,

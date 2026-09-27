@@ -159,9 +159,9 @@ func MergeOpenCodeProvider(existing []byte, ep Endpoint) ([]byte, error) {
 		return nil, fmt.Errorf("internal error: opencode snippet is not a provider object")
 	}
 
-	provider := jsonc.EnsureObject(v, "provider")
-	if provider == nil {
-		return nil, fmt.Errorf("existing opencode.json is not a JSON object")
+	provider, ok := jsonc.EnsureObject(v, "provider")
+	if !ok {
+		return nil, fmt.Errorf("existing opencode.json has a non-object \"provider\" value")
 	}
 	if err := jsonc.SetValue(provider, "nenya", built); err != nil {
 		return nil, err

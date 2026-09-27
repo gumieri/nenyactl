@@ -59,30 +59,23 @@ func MemberName(m *hujson.ObjectMember) string {
 	return memberName(m)
 }
 
-func AsObject(v *hujson.Value) (*hujson.Object, bool) {
-	return GetObject(v)
-}
-
 func GetObject(v *hujson.Value) (*hujson.Object, bool) {
 	obj, ok := v.Value.(*hujson.Object)
 	return obj, ok
 }
 
-// EnsureObject returns the object member named key, creating it as an empty
-// object when absent or when the existing value is not an object. It returns
-// nil only when v itself is not an object.
-func EnsureObject(v *hujson.Value, key string) *hujson.Object {
+// EnsureObject returns the object member named key, creating it when absent.
+// It returns false when v is not an object or the existing member is present
+// but not an object (so callers never silently discard user data).
+func EnsureObject(v *hujson.Value, key string) (*hujson.Object, bool) {
 	obj, ok := v.Value.(*hujson.Object)
 	if !ok {
-		return nil
+		return nil, false
 	}
 	for i := range obj.Members {
 		if memberName(&obj.Members[i]) == key {
-			if _, isObj := obj.Members[i].Value.Value.(*hujson.Object); isObj {
-				return obj.Members[i].Value.Value.(*hujson.Object)
-			}
-			obj.Members[i].Value.Value = &hujson.Object{}
-			return obj.Members[i].Value.Value.(*hujson.Object)
+			child, isObj := obj.Members[i].Value.Value.(*hujson.Object)
+			return child, isObj
 		}
 	}
 	child := &hujson.Object{}
@@ -90,7 +83,17 @@ func EnsureObject(v *hujson.Value, key string) *hujson.Object {
 		Name:  hujson.Value{Value: hujson.Literal(fmt.Sprintf("%q", key))},
 		Value: hujson.Value{Value: child},
 	})
-	return child
+	return child, true
+}
+
+// SetValueFromAny sets a top-level member from a Go value, preserving other
+// members and formatting.
+func SetValueFromAny(v *hujson.Value, key string, value any) error {
+	obj, ok := v.Value.(*hujson.Object)
+	if !ok {
+		return fmt.Errorf("document root is not an object")
+	}
+	return SetValue(obj, key, value)
 }
 
 // SetValue sets a member on an object from a Go value, replacing any existing

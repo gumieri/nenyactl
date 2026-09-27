@@ -1,5 +1,11 @@
 package install
 
+// This package deliberately embeds no copy of Nenya's example config:
+// CONTRACT.md §4.4 reserves `nenya example-config` for that, and the boundary
+// rule forbids re-encoding it. The one shim is BootstrapConfigContent below.
+// internal/containers/setup.go keeps a second minimal shim (it cannot assume a
+// nenya binary); collapse both once example-config ships.
+
 import (
 	"context"
 	"encoding/json"
@@ -27,7 +33,10 @@ type installPaths struct {
 	configDir   string
 	configFile  string
 	secretsFile string
-	unitDir     string
+	// secretsDir is nenya's wildcard secrets merge directory (CONTRACT §6.1),
+	// used only to detect an existing token.
+	secretsDir string
+	unitDir    string
 }
 
 // resolveInstallPaths determines where config, secrets, and units live. It
@@ -55,23 +64,28 @@ func resolveInstallPaths(ctx context.Context, cfg Config, runner CommandRunner, 
 	secretsDir := ""
 	if dir == "" {
 		dir = systemConfigDir()
-	}
-	if p, ok := queryNenyaPaths(ctx, runner, execPath); ok {
-		if p.ConfigDir != "" {
-			dir = p.ConfigDir
-		}
-		if p.ConfigFile != "" {
-			configFile = p.ConfigFile
-		}
-		if p.SecretsDir != "" {
-			secretsDir = p.SecretsDir
+		// nenya paths --json is the authority for the config root. Its
+		// secrets_dir is a wildcard *merge directory* (CONTRACT §6.1), not the
+		// single LoadCredential file the shipped unit expects, so it is used
+		// only to locate an existing token, never to place a fresh one. A
+		// fresh install writes <config-root>/secrets.json, which is what the
+		// unit wires via `LoadCredential=secrets:/etc/nenya/secrets.json`.
+		// Regenerating the unit for another secrets path needs
+		// `nenya service-unit --secrets-file`.
+		if p, ok := queryNenyaPaths(ctx, runner, execPath); ok {
+			if p.ConfigDir != "" {
+				dir = p.ConfigDir
+			}
+			if p.ConfigFile != "" {
+				configFile = p.ConfigFile
+			}
+			if p.SecretsDir != "" {
+				secretsDir = p.SecretsDir
+			}
 		}
 	}
 	if configFile == "" {
 		configFile = filepath.Join(dir, "config.json")
-	}
-	if secretsDir == "" {
-		secretsDir = dir
 	}
 
 	unitDir := cfg.unitDirOverride
@@ -82,7 +96,8 @@ func resolveInstallPaths(ctx context.Context, cfg Config, runner CommandRunner, 
 	return installPaths{
 		configDir:   dir,
 		configFile:  configFile,
-		secretsFile: filepath.Join(secretsDir, "secrets.json"),
+		secretsFile: filepath.Join(dir, "secrets.json"),
+		secretsDir:  secretsDir,
 		unitDir:     unitDir,
 	}, nil
 }
@@ -150,7 +165,7 @@ func bootstrapSecrets(p installPaths) (bool, error) {
 		return false, fmt.Errorf("stat %s: %w", p.secretsFile, err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(p.secretsFile), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p.secretsFile), 0o700); err != nil {
 		return false, fmt.Errorf("create secrets dir %s: %w", filepath.Dir(p.secretsFile), err)
 	}
 

@@ -63,7 +63,11 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	fmt.Println(successStyle.Render("✓"), "nenya installed successfully")
 
 	if installConnect && !installSkipSvc {
-		printClientSnippets(installResolution(installUser, paths.SystemConfigDir()))
+		root := paths.SystemConfigDir()
+		if dir, err := install.ResolveConfigRoot(ctx, cfg, install.NewExecRunner(), "/usr/bin/nenya"); err == nil {
+			root = dir
+		}
+		printClientSnippets(configRoot(root))
 	}
 	return nil
 }

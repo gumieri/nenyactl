@@ -35,9 +35,6 @@ func TestResolveDir(t *testing.T) {
 		if res.ConfigDir() != bareMetalDir {
 			t.Errorf("ConfigDir = %s", res.ConfigDir())
 		}
-		if res.SecretsDir() != bareMetalDir {
-			t.Errorf("SecretsDir = %s", res.SecretsDir())
-		}
 	})
 
 	t.Run("container --dir resolves nested config paths", func(t *testing.T) {
@@ -54,8 +51,8 @@ func TestResolveDir(t *testing.T) {
 		if res.ConfigDir() != filepath.Join(containerDir, "config") {
 			t.Errorf("ConfigDir = %s, want <root>/config", res.ConfigDir())
 		}
-		if res.SecretsDir() != filepath.Join(containerDir, "secrets") {
-			t.Errorf("SecretsDir = %s, want <root>/secrets", res.SecretsDir())
+		if res.Info.SecretsFile() != filepath.Join(containerDir, "secrets", "01-client.json") {
+			t.Errorf("SecretsFile = %s", res.Info.SecretsFile())
 		}
 	})
 

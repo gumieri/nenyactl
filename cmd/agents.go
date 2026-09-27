@@ -81,11 +81,19 @@ func runAgents(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	warnAgentsDropIn(info)
-	if err := agents.WriteAgentsConfig(info.ConfigD, cfg); err != nil {
-		return fmt.Errorf("write agents config: %w", err)
+	if dropInActive(info) {
+		if err := agents.WriteAgentsConfig(info.ConfigD, cfg); err != nil {
+			return fmt.Errorf("write agents config: %w", err)
+		}
+		fmt.Println(successStyle.Render("✓"), "Custom agents saved to", info.ConfigD)
+	} else {
+		// config.d is not the active layout: merging into config.json keeps
+		// the user's config readable on every nenya version (CONTRACT.md §5.1).
+		if err := agents.WriteAgentsIntoConfig(info.ConfigFile, cfg); err != nil {
+			return fmt.Errorf("write agents into config: %w", err)
+		}
+		fmt.Println(successStyle.Render("✓"), "Custom agents merged into", info.ConfigFile)
 	}
-	fmt.Println(successStyle.Render("✓"), "Custom agents saved")
 
 	if err := agents.UpdateConfigDiscovery(info.ConfigFile, false); err != nil {
 		return fmt.Errorf("update discovery: %w", err)
@@ -93,6 +101,26 @@ func runAgents(cmd *cobra.Command, args []string) error {
 	fmt.Println(successStyle.Render("✓"), "Auto-agents disabled")
 
 	return nil
+}
+
+// dropInActive reports whether config.d is already the active layout, i.e. it
+// contains at least one *.json (excluding secrets.json). Writing a drop-in is
+// only safe in that case; otherwise it would make nenya ignore config.json on
+// released <=0.15 builds.
+func dropInActive(info *detect.Info) bool {
+	if info.ConfigD == "" {
+		return false
+	}
+	entries, err := os.ReadDir(info.ConfigD)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() && filepath.Ext(e.Name()) == ".json" && e.Name() != "secrets.json" {
+			return true
+		}
+	}
+	return false
 }
 
 // parseAgentsMode maps an explicit --mode value to a detect.Mode.
@@ -105,23 +133,4 @@ func parseAgentsMode(mode string) (detect.Mode, error) {
 	default:
 		return detect.ModeNone, fmt.Errorf("--mode: invalid value %q (use bare-metal or container)", mode)
 	}
-}
-
-// warnAgentsDropIn warns that writing config.d/20-agents.json makes nenya
-// ignore an existing config.json entirely (CONTRACT.md §5.1; the XOR is tracked
-// in NCTL "Fix config.d precedence inverted"). It does not change the write
-// strategy, which belongs to that workstream.
-func warnAgentsDropIn(info *detect.Info) {
-	if info.ConfigFile == "" || info.ConfigD == "" {
-		return
-	}
-	if _, err := os.Stat(info.ConfigFile); err != nil {
-		return
-	}
-	if entries, err := os.ReadDir(info.ConfigD); err == nil && len(entries) > 0 {
-		return // config.d is already the active layout
-	}
-	fmt.Fprintln(os.Stderr, "Warning: writing", filepath.Join(info.ConfigD, "20-agents.json"),
-		"will make nenya ignore the existing", info.ConfigFile)
-	fmt.Fprintln(os.Stderr, "until the config.d precedence issue is fixed. Back up", info.ConfigFile, "first.")
 }

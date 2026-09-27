@@ -199,7 +199,6 @@ func TestInstallSystemBootstraps(t *testing.T) {
 	if err := InstallWithHTTPAndRunner(context.Background(), cfg, server.Client(), runner); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-
 	for _, f := range []string{
 		filepath.Join(binDir, "nenya"),
 		filepath.Join(configDir, "config.json"),
@@ -215,6 +214,54 @@ func TestInstallSystemBootstraps(t *testing.T) {
 	joined := strings.Join(calls, "\n")
 	if !strings.Contains(joined, "systemctl daemon-reload") || !strings.Contains(joined, "systemctl enable --now nenya.socket") {
 		t.Errorf("service was not enabled; calls: %s", joined)
+	}
+}
+
+func TestInstallSecretsDirFromPaths(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd install path is linux-only")
+	}
+
+	archive := containTarGz(t, map[string]string{
+		"nenya":                "fake-binary-content",
+		"deploy/nenya.service": "[Unit]\nDescription=nenya\nLoadCredential=secrets:/etc/nenya/secrets.json",
+		"deploy/nenya.socket":  "[Socket]\nListenStream=8080",
+	})
+	server := releaseServer(t, archive, "v0.0.0-test")
+	defer server.Close()
+	pointAtServer(t, server)
+
+	tmp := t.TempDir()
+	binDir := filepath.Join(tmp, "bin")
+	configDir := filepath.Join(tmp, "cfg")
+	unitDir := filepath.Join(tmp, "systemd")
+	dest := filepath.Join(binDir, "nenya")
+	pathsJSON := `{"mode":"directory","config_dir":"` + configDir + `","config_file":"` + configDir + `/config.json","secrets_dir":"/run/secrets/nenya","platform":"linux"}`
+
+	var calls []string
+	runner := multiRunner{scriptRunner{outputs: map[string]string{
+		dest + " example-config": `{"server":{"listen_addr":":8080"}}`,
+		dest + " paths --json":   pathsJSON,
+	}, calls: &calls}}
+
+	cfg := Config{
+		Version:           "v0.0.0-test",
+		SkipVerify:        true,
+		binDirOverride:    binDir,
+		configDirOverride: configDir,
+		unitDirOverride:   unitDir,
+	}
+	if err := InstallWithHTTPAndRunner(context.Background(), cfg, server.Client(), runner); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	// The token lands in the config root (what the shipped unit loads), never
+	// in the wildcard secrets merge directory.
+	if _, err := os.Stat(filepath.Join(configDir, "secrets.json")); err != nil {
+		t.Errorf("expected %s/secrets.json: %v", configDir, err)
+	}
+	if _, err := os.Stat("/run/secrets/nenya/secrets.json"); err == nil {
+		t.Error("install wrote a token into the wildcard secrets_dir")
 	}
 }
 

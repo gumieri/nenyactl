@@ -11,7 +11,6 @@ import (
 	"github.com/gumieri/nenyactl/internal/clients"
 	"github.com/gumieri/nenyactl/internal/containers"
 	"github.com/gumieri/nenyactl/internal/jsonc"
-	"github.com/gumieri/nenyactl/internal/paths"
 	"github.com/spf13/cobra"
 )
 
@@ -262,15 +261,4 @@ func printClientSnippets(res dirResolution) {
 	}
 	fmt.Println()
 	fmt.Println(dimStyle.Render("  Full config: nenyactl client add <opencode|cursor|claude|aider> --show-token"))
-}
-
-// installResolution resolves the deployment created by an install so callers
-// can print the connect block for the right root (--user vs system).
-func installResolution(userInstall bool, systemConfigDir string) dirResolution {
-	if userInstall {
-		if dir, err := paths.UserConfigDir(); err == nil {
-			return configRoot(dir)
-		}
-	}
-	return configRoot(systemConfigDir)
 }

@@ -779,6 +779,10 @@ func RunAgentEditor() (bool, map[string]any, error) {
 	return false, cfg, nil
 }
 
+// WriteAgentsConfig writes custom agents as a config.d drop-in. Callers must
+// only use this when config.d is already the active layout (see
+// ShouldWriteDropIn), because on released nenya <=0.15 a drop-in beside a
+// config.json makes nenya ignore config.json entirely.
 func WriteAgentsConfig(configDir string, cfg map[string]any) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -795,6 +799,24 @@ func WriteAgentsConfig(configDir string, cfg map[string]any) error {
 		return err
 	}
 	return os.Rename(tmpPath, path)
+}
+
+// WriteAgentsIntoConfig merges the custom agents into a single config.json,
+// preserving unrelated keys and comments. It is the safe choice when config.d
+// is not already the active layout.
+func WriteAgentsIntoConfig(configFile string, cfg map[string]any) error {
+	v, err := jsonc.ReadFile(configFile)
+	if err != nil {
+		return err
+	}
+	agentsCfg, ok := cfg["agents"]
+	if !ok {
+		return fmt.Errorf("agents config has no \"agents\" key")
+	}
+	if err := jsonc.SetValueFromAny(v, "agents", agentsCfg); err != nil {
+		return err
+	}
+	return jsonc.WriteFile(configFile, v, 0o644)
 }
 
 func UpdateConfigDiscovery(configFile string, autoAgents bool) error {

@@ -77,6 +77,17 @@ func InstallWithHTTP(ctx context.Context, cfg Config, hc HTTPDoer) error {
 	return InstallWithHTTPAndRunner(ctx, cfg, hc, defaultRunner)
 }
 
+// ResolveConfigRoot returns the config root an install with cfg would use,
+// without performing the install. Callers (e.g. the --connect summary) use it
+// so their output matches the paths install actually wrote.
+func ResolveConfigRoot(ctx context.Context, cfg Config, runner CommandRunner, execPath string) (string, error) {
+	p, err := resolveInstallPaths(ctx, cfg, runner, execPath)
+	if err != nil {
+		return "", err
+	}
+	return p.configDir, nil
+}
+
 // InstallWithHTTPAndRunner installs nenya, injecting the HTTP client and the
 // command runner used for signature verification and service management.
 func InstallWithHTTPAndRunner(ctx context.Context, cfg Config, hc HTTPDoer, runner CommandRunner) error {
@@ -197,7 +208,6 @@ func InstallWithHTTPAndRunner(ctx context.Context, cfg Config, hc HTTPDoer, runn
 			bootstrapReady = false
 			fmt.Fprintf(os.Stderr, "Warning: could not create secrets: %v\n", err)
 		}
-
 		if cfg.UserInstall && bootstrapReady {
 			fmt.Fprintf(os.Stderr, "User install is not a service. Run it with:\n  NENYA_CONFIG_DIR=%s NENYA_SECRETS_DIR=%s %s\n", p.configDir, p.configDir, dest)
 		}
