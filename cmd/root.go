@@ -9,8 +9,16 @@ var rootCmd = &cobra.Command{
 	Short: "Manage Nenya AI Gateway",
 	Long: `nenyactl installs and manages Nenya AI Gateway.
 
-Supports bare-metal (systemd/launchd) and container (Podman/Docker) deployments.
-Auto-detects the installation type for config editing.`,
+The primary flow is linear and mode-agnostic:
+
+  nenyactl up        bring Nenya up from any state (installs if missing)
+  nenyactl status    show the resolved deployment, contract, and health
+  nenyactl doctor    diagnose the seam and suggest fixes
+  nenyactl down      stop the resolved deployment
+
+nenyactl chooses bare-metal (systemd/launchd) or container (Podman/Docker)
+internally; the service, containers, and install commands remain for power
+users and advanced layouts.`,
 }
 
 func Execute() error {

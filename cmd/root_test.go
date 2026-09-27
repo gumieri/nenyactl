@@ -32,10 +32,18 @@ func TestRootCmd(t *testing.T) {
 			cmdNames[cmd.Name()] = true
 		}
 
-		expectedCommands := []string{"version", "install", "config", "agents", "containers", "service", "secret"}
+		expectedCommands := []string{"version", "install", "config", "agents", "containers", "service", "secret", "up", "down", "status", "doctor", "client"}
 		for _, name := range expectedCommands {
 			if !cmdNames[name] {
 				t.Errorf("missing subcommand: %s", name)
+			}
+		}
+	})
+
+	t.Run("help presents the linear lifecycle flow", func(t *testing.T) {
+		for _, want := range []string{"nenyactl up", "nenyactl status", "nenyactl doctor", "nenyactl down"} {
+			if !strings.Contains(rootCmd.Long, want) {
+				t.Errorf("root help does not present %q", want)
 			}
 		}
 	})
