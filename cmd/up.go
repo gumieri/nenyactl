@@ -34,6 +34,7 @@ var (
 	upInstall          = install.Install
 	upServiceRun       = func() error { return runServiceStartWithExec(defaultExec) }
 	upServiceReload    = func() error { return runServiceReloadWithExec(defaultExec) }
+	upContainerStart   = func(dir string) error { return runContainerStartWithExec(defaultExec, dir) }
 	upContainerRestart = func(dir string) error { return runContainerRestartWithExec(defaultExec, dir) }
 	upCollectKeys      = containers.CollectProviderKeys
 	upDetect           = detect.Detect
@@ -214,7 +215,7 @@ func ensureProviderKeys(ctx context.Context, res dirResolution, desc nenya.Descr
 func startDeployment(res dirResolution) error {
 	if res.Kind == dirContainerRoot {
 		fmt.Println(infoStyle.Render("›"), "Starting container deployment at", res.Path)
-		return runContainerStartWithExec(defaultExec, res.Path)
+		return upContainerStart(res.Path)
 	}
 	fmt.Println(infoStyle.Render("›"), "Starting the Nenya service")
 	return upServiceRun()

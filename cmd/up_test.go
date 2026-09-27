@@ -190,6 +190,11 @@ func TestUpDeploymentRestartsContainersAfterSavingKeys(t *testing.T) {
 	upContainerRestart = func(dir string) error { restarted = true; return nil }
 	t.Cleanup(func() { upContainerRestart = savedRestart })
 
+	started := false
+	savedContainerStart := upContainerStart
+	upContainerStart = func(dir string) error { started = true; return nil }
+	t.Cleanup(func() { upContainerStart = savedContainerStart })
+
 	reloaded := false
 	savedReload := upServiceReload
 	upServiceReload = func() error { reloaded = true; return nil }
@@ -197,6 +202,9 @@ func TestUpDeploymentRestartsContainersAfterSavingKeys(t *testing.T) {
 
 	if err := upDeployment(context.Background(), res, fakeDoer{status: http.StatusOK}, time.Second); err != nil {
 		t.Fatalf("upDeployment: %v", err)
+	}
+	if !started {
+		t.Error("expected containers to start")
 	}
 	if !restarted {
 		t.Error("expected containers to restart after saving provider keys")
