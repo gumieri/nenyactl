@@ -183,17 +183,21 @@ func ensureClientToken(ctx context.Context, res dirResolution) error {
 }
 
 // ensureProviderKeys prompts for provider keys when none are configured and
-// reports whether it saved any. The prompt is best-effort: without a terminal
-// it is skipped, and it is skipped entirely when the contract could not be
-// read, since we cannot know what the running nenya understands.
+// reports whether it saved any. Without a terminal the prompt is skipped. When
+// the contract is unreadable (a released nenya without `describe`) it falls back
+// to the scaffold provider shim, as `containers setup` does, rather than
+// skipping the prompt entirely.
 func ensureProviderKeys(ctx context.Context, res dirResolution, desc nenya.Description, descErr error) bool {
-	if descErr != nil {
+	if descErr == nil && len(desc.Providers.Configured) > 0 {
 		return false
 	}
-	if len(desc.Providers.Configured) > 0 {
-		return false
+	var providers []containers.ProviderDef
+	if descErr == nil {
+		providers = providerDefs(desc.Providers.Catalog, desc.Providers.Configured)
+	} else {
+		providers = containers.BuiltinProviders
 	}
-	keys, err := upCollectKeys(providerDefs(desc.Providers.Catalog, desc.Providers.Configured))
+	keys, err := upCollectKeys(providers)
 	if err != nil || len(keys) == 0 {
 		return false
 	}

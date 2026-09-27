@@ -358,6 +358,34 @@ func TestAgentsTUI_ModelFilter(t *testing.T) {
 	}
 }
 
+func TestAgentsTUI_ModelSelectionIsProviderQualified(t *testing.T) {
+	// Two providers offer the same model name; selecting one must not mark the
+	// other, and the saved list carries the provider-qualified id.
+	m := newTUIModel(CatalogFromDescribe([]CatalogModel{
+		{Provider: "openrouter", Model: "gpt-5"},
+		{Provider: "zen", Model: "gpt-5"},
+	}))
+	m.startNew()
+
+	m.loadModels()
+	if len(m.models) != 2 {
+		t.Fatalf("models = %+v, want 2", m.models)
+	}
+	m.models[0].Selected = true
+	m.syncAgentModels()
+
+	got := m.agents[m.cursor].Models
+	if len(got) != 1 || got[0] != m.models[0].Qualified {
+		t.Errorf("models = %v, want [%s]", got, m.models[0].Qualified)
+	}
+
+	// Reloading must select only the matching row.
+	m.loadModels()
+	if !m.models[0].Selected || m.models[1].Selected {
+		t.Errorf("selection not provider-scoped: %+v", m.models)
+	}
+}
+
 func TestAgentsTUI_EditorResult(t *testing.T) {
 	t.Run("unsaved is a no-op", func(t *testing.T) {
 		m := newTestModel()

@@ -63,7 +63,6 @@ type tuiModel struct {
 	pickerView    viewport.Model
 	width, height int
 	helpModel     help.Model
-	helpKM        tui.KeyMap
 
 	saved bool
 	done  bool
@@ -80,7 +79,6 @@ func newTUIModel(catalog Catalog) tuiModel {
 		agentsView:  viewport.New(0, 0),
 		pickerView:  viewport.New(0, 0),
 		helpModel:   tui.NewHelpModel(),
-		helpKM:      tui.ListKeyMap,
 	}
 
 	m.editName.Placeholder = "agent-name"
@@ -90,6 +88,10 @@ func newTUIModel(catalog Catalog) tuiModel {
 	m.modelFilter.Placeholder = "Filter models..."
 	m.modelFilter.CharLimit = 50
 	m.modelFilter.Width = 40
+
+	// Seed the viewport content so the first render is populated before any
+	// WindowSizeMsg arrives (the scroll helpers early-return at height 0).
+	m.updateAgentContent()
 
 	return m
 }
@@ -102,19 +104,16 @@ func (m tuiModel) Init() tea.Cmd {
 // handles "s", so only it advertises save; elsewhere "s" is input text.
 func (m tuiModel) helpKeyMap() tui.KeyMap {
 	switch m.screen {
-	case screenList:
-		return tui.ListKeyMapWithSave()
+	case screenList, screenConfirm:
+		return tui.AgentsKeyMap
 	case screenEdit:
 		return tui.FormKeyMap
 	case screenPicker:
 		return tui.PickerKeyMap
-	case screenConfirm:
-		return tui.ConfirmKeyMap
 	default:
-		return m.helpKM
+		return tui.AgentsKeyMap
 	}
 }
-
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
@@ -410,7 +409,9 @@ func (m *tuiModel) syncAgentModels() {
 	var selected []string
 	for _, mod := range m.models {
 		if mod.Selected {
-			selected = append(selected, mod.ID)
+			// Store the provider-qualified id so two providers offering the
+			// same model name cannot collapse into one entry.
+			selected = append(selected, mod.Qualified)
 		}
 	}
 	m.agents[m.cursor].Models = selected
@@ -819,6 +820,12 @@ func (m *tuiModel) editorResult() (bool, map[string]any, error) {
 
 	agentsMap := make(map[string]map[string]any)
 	for _, a := range m.agents {
+		if a.Name == "" {
+			return false, nil, fmt.Errorf("agent name cannot be empty")
+		}
+		if _, dup := agentsMap[a.Name]; dup {
+			return false, nil, fmt.Errorf("duplicate agent name %q", a.Name)
+		}
 		agentsMap[a.Name] = map[string]any{
 			"strategy": a.Strategy,
 			"models":   a.Models,

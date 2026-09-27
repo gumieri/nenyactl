@@ -220,10 +220,11 @@ func statusPort(res dirResolution, desc nenya.Description, haveDesc bool) string
 			return p
 		}
 	}
-	// Fallback for a deployment whose nenya lacks `describe --json`: read the
-	// listen address from the layout actually in use. On released nenya ≤0.15 a
-	// config.d drop-in makes nenya ignore config.json (the XOR hazard), so the
-	// drop-ins win when both are present.
+	// Port resolution reads the deployment's config.json and config.d drop-ins
+	// only as a shim for a released nenya without `describe --json` (NENYA-103).
+	// On released nenya ≤0.15 a config.d drop-in makes nenya ignore config.json
+	// (the XOR hazard, AGENTS.md §4), so drop-ins are preferred when present;
+	// delete this reader once `describe` is stable everywhere.
 	if addon := portFromConfigDropIns(res.Info.ConfigD); addon != "" {
 		return addon
 	}
@@ -323,11 +324,4 @@ func healthStatus(ctx context.Context, doer healthDoer, port string) (bool, stri
 		return true, "healthy"
 	}
 	return false, resp.Status
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

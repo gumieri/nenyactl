@@ -66,6 +66,38 @@ func ListKeyMapWithSave() KeyMap {
 	return km
 }
 
+// SectionsKeyMap is the config-editor sections screen: navigation, expand, and
+// save, but no delete/add/toggle (which belong to other screens).
+var SectionsKeyMap = KeyMap{
+	Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+	Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+	Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "expand")),
+	Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "quit")),
+	Quit:   key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
+	Save:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "save")),
+}
+
+// KeysKeyMap is the config-editor keys screen: navigation and edit only.
+var KeysKeyMap = KeyMap{
+	Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+	Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+	Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "edit")),
+	Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
+}
+
+// AgentsKeyMap is the agents screen: navigation, save, add, delete, toggle.
+var AgentsKeyMap = KeyMap{
+	Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+	Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+	Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "edit")),
+	Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
+	Quit:   key.NewBinding(key.WithKeys("ctrl+c", "q"), key.WithHelp("ctrl+c", "quit")),
+	Delete: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
+	Add:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add")),
+	Toggle: key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle auto")),
+	Save:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "save")),
+}
+
 var FormKeyMap = KeyMap{
 	Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
 	Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),

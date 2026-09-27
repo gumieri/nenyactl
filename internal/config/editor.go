@@ -75,7 +75,6 @@ type configModel struct {
 	agentsView    viewport.Model
 	width, height int
 	helpModel     help.Model
-	helpKM        tui.KeyMap
 
 	saved bool
 	quit  bool
@@ -109,7 +108,6 @@ func newConfigModel(cfg *hujson.Value, effective []byte) configModel {
 		keysView:     viewport.New(0, 0),
 		agentsView:   viewport.New(0, 0),
 		helpModel:    tui.NewHelpModel(),
-		helpKM:       tui.ListKeyMap,
 		changes:      make(map[string]string),
 	}
 	m.editInput.CharLimit = 256
@@ -144,7 +142,19 @@ func newConfigModel(cfg *hujson.Value, effective []byte) configModel {
 	m.agents, m.agentsModeAuto = agentsFromEffective(effective)
 	m.autoAgentsOriginal = m.agentsModeAuto
 
+	// Seed the viewport content so the first render is populated before any
+	// WindowSizeMsg arrives (the scroll helpers early-return at height 0).
+	m.updateSectionsContent()
+	m.updateAgentsContent()
+
 	return m
+}
+
+// resetCursor moves the section cursor to the top and refreshes the view.
+func (m *configModel) resetCursor() {
+	m.cursor = 0
+	m.scrollSections()
+	m.updateSectionsContent()
 }
 
 // effectiveAgents is the subset of the effective config the agents editor
@@ -203,14 +213,16 @@ func (m configModel) Init() tea.Cmd { return nil }
 // advertise it.
 func (m configModel) helpKeyMap() tui.KeyMap {
 	switch m.screen {
-	case screenSections, screenAgents:
-		return tui.ListKeyMapWithSave()
+	case screenSections:
+		return tui.SectionsKeyMap
+	case screenAgents:
+		return tui.AgentsKeyMap
 	case screenKeys:
-		return tui.ListKeyMap
+		return tui.KeysKeyMap
 	case screenEdit:
 		return tui.FormKeyMap
 	default:
-		return m.helpKM
+		return tui.SectionsKeyMap
 	}
 }
 
@@ -382,7 +394,7 @@ func (m *configModel) loadSection(sectionName string) {
 	if !ok {
 		m.entries = nil
 		m.cursor = 0
-		m.scrollKeys()
+		m.updateKeysContent()
 		return
 	}
 
@@ -893,11 +905,6 @@ func (m *configModel) result() (*EditorResult, error) {
 		changes["discovery.auto_agents"] = strconv.FormatBool(m.agentsModeAuto)
 	}
 	return &EditorResult{Changes: changes}, nil
-}
-
-func (m *configModel) resetCursor() {
-	m.cursor = 0
-	m.scrollSections()
 }
 
 func trunc(s string, max int) string {

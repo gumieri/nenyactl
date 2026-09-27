@@ -11,17 +11,11 @@ import (
 )
 
 func TestWarnIfNonDefaultRoot(t *testing.T) {
-	t.Run("notes when the unit references the config root", func(t *testing.T) {
-		unitDir := t.TempDir()
-		dest := unitSpecs()[0].destination
-		if err := os.WriteFile(filepath.Join(unitDir, dest), []byte("ExecStart=/bin/nenya --config-dir /custom/nenya\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		// Capture stderr.
+	t.Run("notes when the unit was generated", func(t *testing.T) {
 		old := os.Stderr
 		r, w, _ := os.Pipe()
 		os.Stderr = w
-		warnIfNonDefaultRoot(installPaths{unitDir: unitDir, configDir: "/custom/nenya"})
+		warnIfNonDefaultRoot(installPaths{unitDir: t.TempDir(), configDir: "/custom/nenya"}, true)
 		_ = w.Close()
 		os.Stderr = old
 		out, _ := io.ReadAll(r)
@@ -30,16 +24,11 @@ func TestWarnIfNonDefaultRoot(t *testing.T) {
 		}
 	})
 
-	t.Run("warns when the unit pins the default root", func(t *testing.T) {
-		unitDir := t.TempDir()
-		dest := unitSpecs()[0].destination
-		if err := os.WriteFile(filepath.Join(unitDir, dest), []byte("LoadCredential=secrets:/etc/nenya/secrets.json\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	t.Run("warns when the unit came from the archive", func(t *testing.T) {
 		old := os.Stderr
 		r, w, _ := os.Pipe()
 		os.Stderr = w
-		warnIfNonDefaultRoot(installPaths{unitDir: unitDir, configDir: "/custom/nenya", secretsFile: "/custom/nenya/secrets.json"})
+		warnIfNonDefaultRoot(installPaths{unitDir: t.TempDir(), configDir: "/custom/nenya", secretsFile: "/custom/nenya/secrets.json"}, false)
 		_ = w.Close()
 		os.Stderr = old
 		out, _ := io.ReadAll(r)
@@ -52,7 +41,7 @@ func TestWarnIfNonDefaultRoot(t *testing.T) {
 		old := os.Stderr
 		r, w, _ := os.Pipe()
 		os.Stderr = w
-		warnIfNonDefaultRoot(installPaths{unitDir: t.TempDir(), configDir: defaultUnitConfigDir})
+		warnIfNonDefaultRoot(installPaths{unitDir: t.TempDir(), configDir: defaultUnitConfigDir}, false)
 		_ = w.Close()
 		os.Stderr = old
 		out, _ := io.ReadAll(r)
@@ -87,6 +76,16 @@ func TestServiceUnitArgv(t *testing.T) {
 	argv := "/bin/nenya service-unit --init systemd --exec-path /bin/nenya --config-dir /etc/nenya --secrets-file /etc/nenya/secrets.json"
 	if _, ok := serviceUnitContent(context.Background(), builder(map[string]string{argv: "[Unit]"}), "/bin/nenya", "systemd", "/etc/nenya", "/etc/nenya/secrets.json"); !ok {
 		t.Errorf("service-unit argv mismatch; want exactly %q (CONTRACT.md §4.5)", argv)
+	}
+}
+
+func TestServiceUnitContentRejectsNonUnit(t *testing.T) {
+	// A binary that ignores service-unit and prints something else (exit 0)
+	// must not have that text written as a unit.
+	key := "/bin/nenya service-unit --init systemd --exec-path /bin/nenya --config-dir /etc/nenya --secrets-file /etc/nenya/secrets.json"
+	r := scriptRunner{outputs: map[string]string{key: "usage: nenya service-unit\n"}}
+	if _, ok := serviceUnitContent(context.Background(), r, "/bin/nenya", "systemd", "/etc/nenya", "/etc/nenya/secrets.json"); ok {
+		t.Fatal("expected ok=false for output that is not a unit")
 	}
 }
 
