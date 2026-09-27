@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -27,6 +28,34 @@ const testConfig = `{
   }
 }
 `
+
+func TestAgentsValueRejectsBadNames(t *testing.T) {
+	if _, err := agentsValue([]agentEntry{{Name: "", Strategy: "fallback"}}); err == nil {
+		t.Error("expected an error for an empty agent name")
+	}
+	if _, err := agentsValue([]agentEntry{
+		{Name: "dup", Strategy: "fallback"},
+		{Name: "dup", Strategy: "fallback"},
+	}); err == nil {
+		t.Error("expected an error for a duplicate agent name")
+	}
+
+	// A valid set round-trips, and a nil model list becomes [].
+	out, err := agentsValue([]agentEntry{{Name: "build", Strategy: "fallback"}})
+	if err != nil {
+		t.Fatalf("agentsValue: %v", err)
+	}
+	var got map[string]struct {
+		Strategy string   `json:"strategy"`
+		Models   []string `json:"models"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("agentsValue output is not JSON: %v", err)
+	}
+	if got["build"].Models == nil {
+		t.Error("models should marshal as [] not null")
+	}
+}
 
 func TestParseLiteralValue(t *testing.T) {
 	tests := []struct {

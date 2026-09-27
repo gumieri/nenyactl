@@ -45,7 +45,7 @@ checks the exit status; until it ships, nenyactl uses a documented fallback:
 | `paths --json` | target | platform defaults (`/etc/nenya`, `~/.local/share/nenyactl/nenya`) |
 | `describe --json` | target | contract check falls back to `version --json`; `config edit` requires `describe` and fails with an actionable error otherwise |
 | `example-config` | target | a minimal, documented bootstrap config |
-| `service-unit` | target | the units shipped in the release archive (`deploy/`) when the command is absent. When present, `nenya.service` is generated; the socket is always from the archive |
+| `service-unit` | target | the units shipped in the release archive (`deploy/`) when the command is absent. When present, the service unit (`nenya.service` on Linux, `com.gumieri.nenya.plist` on macOS) is generated; the systemd socket is always from the archive |
 | `config set` / `secret set` | target | none — nenyactl no longer edits config or secrets files directly; the command fails until the contract ships |
 
 `agents` requires `describe --json` and fails with an actionable message without

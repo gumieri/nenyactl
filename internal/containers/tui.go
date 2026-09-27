@@ -160,17 +160,29 @@ func (m tuiModel) Init() tea.Cmd {
 // helpKeyMap returns the key map for the active screen so the help bar only
 // advertises handled keys.
 func (m tuiModel) helpKeyMap() tui.KeyMap {
-	km := tui.KeyMap{
-		Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
-		Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
-		Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "continue")),
-		Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-		Quit:   key.NewBinding(key.WithKeys("ctrl+c", "q"), key.WithHelp("ctrl+c", "quit")),
+	switch m.screen {
+	case screenSelect:
+		return tui.KeyMap{
+			Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+			Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+			Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "continue")),
+			Toggle: key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
+			Quit:   key.NewBinding(key.WithKeys("ctrl+c", "q"), key.WithHelp("ctrl+c", "quit")),
+		}
+	case screenKeys:
+		return tui.KeyMap{
+			Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "continue")),
+			Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
+			Quit:   key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
+		}
+	default: // screenCustom
+		return tui.KeyMap{
+			Toggle: key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next field")),
+			Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "save")),
+			Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
+			Quit:   key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
+		}
 	}
-	if m.screen == screenSelect {
-		km.Toggle = key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle"))
-	}
-	return km
 }
 
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -180,7 +192,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch m.screen {
 		case screenSelect:
-			return m.updateSelect(msg)
+			// Command keys (enter/space/quit) are handled here; navigation is
+			// forwarded to the table below.
+			if model, cmd, handled := m.selectKey(msg); handled {
+				return model, cmd
+			}
 		case screenKeys:
 			return m.updateKeys(msg)
 		case screenCustom:
@@ -214,21 +230,24 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *tuiModel) updateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+// selectKey handles the command keys on the provider-select screen. It returns
+// handled=false for navigation keys (up/down/page), which the caller forwards to
+// the table so the cursor can move.
+func (m *tuiModel) selectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	switch msg.String() {
 	case "ctrl+c", "esc":
 		m.quitting = true
-		return m, tea.Quit
+		return m, tea.Quit, true
 
 	case "q":
 		m.quitting = true
-		return m, tea.Quit
+		return m, tea.Quit, true
 
 	case "enter":
 		if m.table.Cursor() == len(m.providers) {
 			m.screen = screenCustom
 			m.customFocus = 0
-			return m, m.customName.Focus()
+			return m, m.customName.Focus(), true
 		}
 
 		selectedCount := 0
@@ -240,7 +259,7 @@ func (m *tuiModel) updateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		if selectedCount == 0 {
 			m.quitting = true
-			return m, tea.Quit
+			return m, tea.Quit, true
 		}
 
 		m.screen = screenKeys
@@ -259,10 +278,10 @@ func (m *tuiModel) updateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		if len(m.keys) > 0 {
 			m.keys[0].input.Focus()
-		} else {
-			m.quitting = true
-			return m, tea.Quit
+			return m, nil, true
 		}
+		m.quitting = true
+		return m, tea.Quit, true
 
 	case " ":
 		idx := m.table.Cursor()
@@ -270,9 +289,10 @@ func (m *tuiModel) updateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selected[idx] = !m.selected[idx]
 			m.updateTableRow(idx)
 		}
+		return m, nil, true
 	}
 
-	return m, nil
+	return m, nil, false
 }
 
 func (m *tuiModel) updateCustom(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

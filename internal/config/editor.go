@@ -954,7 +954,7 @@ func agentsValue(agents []agentEntry) (string, error) {
 		}
 		agentsMap[a.Name] = map[string]any{
 			"strategy": a.Strategy,
-			"models":   a.Models,
+			"models":   nonNilStrings(a.Models),
 		}
 	}
 	data, err := json.Marshal(agentsMap)
@@ -962,4 +962,13 @@ func agentsValue(agents []agentEntry) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// nonNilStrings returns a non-nil slice so an agent with no models marshals as
+// "models": [] rather than null.
+func nonNilStrings(models []string) []string {
+	if models == nil {
+		return []string{}
+	}
+	return models
 }

@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -383,6 +384,94 @@ func TestAgentsTUI_ModelSelectionIsProviderQualified(t *testing.T) {
 	m.loadModels()
 	if !m.models[0].Selected || m.models[1].Selected {
 		t.Errorf("selection not provider-scoped: %+v", m.models)
+	}
+}
+
+func TestAgentsTUI_HelpKeyMapPerScreen(t *testing.T) {
+	m := newTestModel()
+	cases := []struct {
+		screen screen
+		want   string
+	}{
+		{screenList, "s"},
+		{screenEdit, "tab"},
+		{screenConfirm, "y/enter"},
+	}
+	for _, c := range cases {
+		m.screen = c.screen
+		km := m.helpKeyMap()
+		found := false
+		for _, b := range km.ShortHelp() {
+			if strings.Contains(b.Help().Key, c.want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("screen %d help missing %q", c.screen, c.want)
+		}
+	}
+
+	// The picker must not advertise save (its keys are for the filter/list).
+	m.screen = screenPicker
+	for _, b := range m.helpKeyMap().ShortHelp() {
+		if b.Help().Key == "s" {
+			t.Error("picker must not advertise save")
+		}
+	}
+}
+
+func TestAgentsTUI_EditorResultRejectsBadNames(t *testing.T) {
+	newSaved := func(agents ...Agent) *tuiModel {
+		m := newTestModel()
+		m.saved = true
+		m.modeAuto = false
+		m.agents = agents
+		return &m
+	}
+
+	if _, _, err := newSaved(Agent{Name: "", Strategy: "fallback"}).editorResult(); err == nil {
+		t.Error("expected an error for an empty agent name")
+	}
+	if _, _, err := newSaved(
+		Agent{Name: "dup", Strategy: "fallback"},
+		Agent{Name: "dup", Strategy: "fallback"},
+	).editorResult(); err == nil {
+		t.Error("expected an error for a duplicate agent name")
+	}
+}
+
+func TestNonNilModels(t *testing.T) {
+	if got := nonNilModels(nil); got == nil || len(got) != 0 {
+		t.Errorf("nonNilModels(nil) = %v, want an empty non-nil slice", got)
+	}
+	in := []string{"a"}
+	if got := nonNilModels(in); &got[0] != &in[0] {
+		t.Error("nonNilModels should return the input unchanged when non-nil")
+	}
+}
+
+func TestAgentsTUI_PickerFilter(t *testing.T) {
+	m := newTestModel()
+	m.startNew()
+	m.screen = screenPicker
+	m.modelFilter.Focus()
+
+	update(&m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("gem")})
+	if m.modelFilter.Value() != "gem" {
+		t.Fatalf("filter value = %q, want gem", m.modelFilter.Value())
+	}
+	if len(m.models) != 1 || m.models[0].Provider != "gemini" {
+		t.Errorf("models = %+v, want only gemini", m.models)
+	}
+
+	// Esc leaves the filter, then the picker.
+	update(&m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.modelFilter.Focused() {
+		t.Error("esc should blur the filter first")
+	}
+	update(&m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.screen != screenEdit {
+		t.Error("second esc should leave the picker")
 	}
 }
 

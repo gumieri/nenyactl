@@ -46,17 +46,6 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{k.ShortHelp()}
 }
 
-var ListKeyMap = KeyMap{
-	Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
-	Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
-	Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
-	Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-	Quit:   key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
-	Delete: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
-	Add:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add")),
-	Toggle: key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
-}
-
 // SectionsKeyMap is the config-editor sections screen: navigation, expand, and
 // save, but no delete/add/toggle (which belong to other screens).
 var SectionsKeyMap = KeyMap{
@@ -108,9 +97,4 @@ var PickerKeyMap = KeyMap{
 	Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "done")),
 	Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 	Toggle: key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
-}
-
-var DoneKeyMap = KeyMap{
-	Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "confirm")),
-	Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 }

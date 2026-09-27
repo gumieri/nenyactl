@@ -271,12 +271,26 @@ func (m *tuiModel) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *tuiModel) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "esc":
+		if m.modelFilter.Focused() {
+			// Esc first leaves the filter, then the picker.
+			m.modelFilter.Blur()
+			m.modelFilter.Reset()
+			m.loadModels()
+			return m, nil
+		}
 		m.screen = screenEdit
 		return m, nil
 	case "enter":
+		if m.modelFilter.Focused() {
+			m.modelFilter.Blur()
+			return m, nil
+		}
 		m.screen = screenEdit
 		return m, nil
 	case " ":
+		if m.modelFilter.Focused() {
+			break
+		}
 		if m.modelCursor < len(m.models) {
 			m.models[m.modelCursor].Selected = !m.models[m.modelCursor].Selected
 			m.syncAgentModels()
@@ -284,20 +298,35 @@ func (m *tuiModel) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "up", "k":
+		if m.modelFilter.Focused() {
+			break
+		}
 		if m.modelCursor > 0 {
 			m.modelCursor--
 			m.scrollPicker()
 		}
 		return m, nil
 	case "down", "j":
+		if m.modelFilter.Focused() {
+			break
+		}
 		if m.modelCursor < len(m.models)-1 {
 			m.modelCursor++
 			m.scrollPicker()
 		}
 		return m, nil
 	case "/":
-		m.modelFilter.Focus()
+		if !m.modelFilter.Focused() {
+			m.modelFilter.Focus()
+		}
 		return m, nil
+	}
+
+	// While the filter is focused, forward typed characters to it and
+	// re-filter the picker.
+	if m.modelFilter.Focused() {
+		m.modelFilter, _ = m.modelFilter.Update(msg)
+		m.loadModels()
 	}
 	return m, nil
 }
@@ -803,6 +832,15 @@ func RunAgentEditor(catalog Catalog) (bool, map[string]any, error) {
 	return tm.editorResult()
 }
 
+// nonNilModels returns a non-nil slice so an agent with no models marshals as
+// "models": [] rather than null, which nenya's schema expects to be an array.
+func nonNilModels(models []string) []string {
+	if models == nil {
+		return []string{}
+	}
+	return models
+}
+
 // editorResult assembles the editor's output from its final state. It is
 // separate from the TUI run loop so the assembly (not just the interactive
 // path) is unit-testable.
@@ -831,7 +869,7 @@ func (m *tuiModel) editorResult() (bool, map[string]any, error) {
 		}
 		agentsMap[a.Name] = map[string]any{
 			"strategy": a.Strategy,
-			"models":   a.Models,
+			"models":   nonNilModels(a.Models),
 		}
 	}
 

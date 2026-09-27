@@ -13,31 +13,31 @@ func TestNewHelpModel(t *testing.T) {
 	})
 }
 
-func TestListKeyMap(t *testing.T) {
+func TestAgentsKeyMap(t *testing.T) {
 	t.Run("all key bindings are defined", func(t *testing.T) {
-		if ListKeyMap.Up.Help().Key == "" {
+		if AgentsKeyMap.Up.Help().Key == "" {
 			t.Error("Up key help is empty")
 		}
-		if ListKeyMap.Down.Help().Key == "" {
+		if AgentsKeyMap.Down.Help().Key == "" {
 			t.Error("Down key help is empty")
 		}
-		if ListKeyMap.Select.Help().Key == "" {
+		if AgentsKeyMap.Select.Help().Key == "" {
 			t.Error("Select key help is empty")
 		}
-		if ListKeyMap.Quit.Help().Key == "" {
+		if AgentsKeyMap.Quit.Help().Key == "" {
 			t.Error("Quit key help is empty")
 		}
 	})
 
 	t.Run("ShortHelp returns non-empty bindings", func(t *testing.T) {
-		bindings := ListKeyMap.ShortHelp()
+		bindings := AgentsKeyMap.ShortHelp()
 		if len(bindings) == 0 {
 			t.Error("ShortHelp should return at least one binding")
 		}
 	})
 
 	t.Run("FullHelp returns a slice of bindings", func(t *testing.T) {
-		bindings := ListKeyMap.FullHelp()
+		bindings := AgentsKeyMap.FullHelp()
 		if len(bindings) != 1 {
 			t.Errorf("expected 1 row of bindings, got %d", len(bindings))
 		}
@@ -71,11 +71,11 @@ func TestPickerKeyMap(t *testing.T) {
 	})
 }
 
-func TestDoneKeyMap(t *testing.T) {
+func TestConfirmKeyMapBindings(t *testing.T) {
 	t.Run("ShortHelp returns non-empty bindings", func(t *testing.T) {
-		bindings := DoneKeyMap.ShortHelp()
+		bindings := ConfirmKeyMap.ShortHelp()
 		if len(bindings) == 0 {
-			t.Error("DoneKeyMap ShortHelp should return at least one binding")
+			t.Error("ConfirmKeyMap ShortHelp should return at least one binding")
 		}
 	})
 }
@@ -92,7 +92,7 @@ func TestKeyMapShortHelp(t *testing.T) {
 
 func TestKeyMapFullHelp(t *testing.T) {
 	t.Run("returns a single row of ShortHelp", func(t *testing.T) {
-		rows := ListKeyMap.FullHelp()
+		rows := AgentsKeyMap.FullHelp()
 		if len(rows) != 1 {
 			t.Errorf("expected 1 row, got %d", len(rows))
 		}
