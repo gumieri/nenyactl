@@ -131,7 +131,9 @@ func commandError(args []string, err error, stderr string) error {
 		return fmt.Errorf("nenya %s: %w", redactedArgs(args), err)
 	}
 	if isConfigSet(args) && msg != "" {
-		msg = strings.ReplaceAll(msg, args[len(args)-1], "<value>")
+		if v := args[len(args)-1]; v != "" {
+			msg = strings.ReplaceAll(msg, v, "<value>")
+		}
 	}
 	if msg != "" {
 		return fmt.Errorf("nenya %s: %w: %s", redactedArgs(args), err, msg)

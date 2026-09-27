@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gumieri/nenyactl/internal/jsonc"
 	"github.com/tailscale/hujson"
 )
@@ -144,8 +145,14 @@ func TestAgentsModeToggleRecorded(t *testing.T) {
 	}
 
 	m := newConfigModel(cfg, []byte(testConfig))
-	m.agentsModeAuto = !m.agentsModeAuto
-	m.agentsDirty = false
+	m.screen = screenAgents
+
+	// Toggling the mode is not an agents-list edit: it must not mark the
+	// agents dirty or emit an agents rewrite.
+	update(&m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" ")})
+	if m.agentsDirty {
+		t.Error("a mode-only toggle must not mark the agents dirty")
+	}
 
 	result, err := m.result()
 	if err != nil || result == nil {
@@ -154,6 +161,9 @@ func TestAgentsModeToggleRecorded(t *testing.T) {
 	want := strconv.FormatBool(m.agentsModeAuto)
 	if got := result.Changes["discovery.auto_agents"]; got != want {
 		t.Errorf("auto_agents change = %q, want %q", got, want)
+	}
+	if _, ok := result.Changes["agents"]; ok {
+		t.Error("a mode-only toggle must not emit an agents change")
 	}
 }
 

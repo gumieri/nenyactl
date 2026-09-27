@@ -299,7 +299,6 @@ func (m *configModel) updateAgents(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case " ":
 		m.agentsModeAuto = !m.agentsModeAuto
-		m.agentsDirty = true
 		m.updateAgentsContent()
 		return m, nil
 	case "enter":
