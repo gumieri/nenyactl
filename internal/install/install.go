@@ -274,7 +274,7 @@ func checkInstalledContract(ctx context.Context, runner CommandRunner, execPath 
 	}
 
 	probe := func(args ...string) (versioned, bool) {
-		out, err := runner.Output(ctx, execPath, args...)
+		out, err := probeOutput(ctx, runner, execPath, args...)
 		if err != nil || len(out) == 0 {
 			return versioned{}, false
 		}

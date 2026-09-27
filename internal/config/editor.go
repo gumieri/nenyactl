@@ -3,8 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -55,13 +54,15 @@ type configModel struct {
 	activeSection string
 
 	// multi-file tracking
-	sources map[string]sourceInfo
-	dirty   map[string]bool
+	// changes records edited top-level entries as dotted key -> raw JSON
+	// value. It is the only output of the editor: every change is applied by
+	// the caller through nenya's single writer (nenya config set), so nenyactl
+	// never writes a config file itself.
+	changes map[string]string
 
 	// agents section state
 	agents         []agentEntry
 	agentsModeAuto bool
-	agentsFile     string
 	agentsDirty    bool
 	agentCursor    int
 	editName       textinput.Model
@@ -77,19 +78,8 @@ type configModel struct {
 	quit  bool
 }
 
-func newConfigModel(cfg *hujson.Value, configFile, configD string) configModel {
+func newConfigModel(cfg *hujson.Value, effective []byte, displayPath string) configModel {
 	sections := jsonc.TopLevelKeys(cfg)
-
-	// Build sources map for all top-level keys
-	sources := make(map[string]sourceInfo)
-	for _, key := range sections {
-		if v, ok := jsonc.GetField(cfg, key); ok {
-			sources[key] = sourceInfo{
-				filePath: configFile,
-				value:    v,
-			}
-		}
-	}
 
 	m := configModel{
 		screen:       screenSections,
@@ -102,12 +92,7 @@ func newConfigModel(cfg *hujson.Value, configFile, configD string) configModel {
 		agentsView:   viewport.New(0, 0),
 		helpModel:    tui.NewHelpModel(),
 		helpKM:       tui.ListKeyMap,
-
-		// agents state
-		agentsFile: filepath.Join(configD, "20-agents.json"),
-
-		sources: sources,
-		dirty:   make(map[string]bool),
+		changes:      make(map[string]string),
 	}
 	m.editInput.CharLimit = 256
 	m.editInput.Width = 50
@@ -115,16 +100,14 @@ func newConfigModel(cfg *hujson.Value, configFile, configD string) configModel {
 	// Fill sections array
 	for i, key := range sections {
 		m.sections[i] = sectionInfo{
-			name:    key,
-			isAgent: false,
-			source:  configFile,
+			name:   key,
+			source: displayPath,
 		}
 	}
 	// Add agents section at the end
 	m.sections[len(sections)] = sectionInfo{
 		name:    "agents",
 		isAgent: true,
-		source:  "", // special section
 	}
 
 	// Initialize agents UI state
@@ -133,40 +116,55 @@ func newConfigModel(cfg *hujson.Value, configFile, configD string) configModel {
 	m.editName.CharLimit = 64
 	m.editName.Width = 40
 
-	// Load agents from file if exists
-	if data, err := os.ReadFile(m.agentsFile); err == nil {
-		var agentsMap map[string]any
-		if err := json.Unmarshal(data, &agentsMap); err == nil {
-			if auto, ok := agentsMap["auto_agents"].(bool); ok {
-				m.agentsModeAuto = auto
-			}
-			if agentsList, ok := agentsMap["agents"].(map[string]any); ok {
-				for name, agentAny := range agentsList {
-					if agentMap, ok := agentAny.(map[string]any); ok {
-						strategy := "fallback"
-						if s, ok := agentMap["strategy"].(string); ok {
-							strategy = s
-						}
-						models := []string{}
-						if m, ok := agentMap["models"].([]any); ok {
-							for _, modelAny := range m {
-								if modelStr, ok := modelAny.(string); ok {
-									models = append(models, modelStr)
-								}
-							}
-						}
-						m.agents = append(m.agents, agentEntry{
-							Name:     name,
-							Strategy: strategy,
-							Models:   models,
-						})
-					}
-				}
-			}
-		}
-	}
+	// Agents come from the effective document (nenya describe), never from a
+	// drop-in path: the editor must not read or merge config files itself.
+	m.agents, m.agentsModeAuto = agentsFromEffective(effective)
 
 	return m
+}
+
+// effectiveAgents is the subset of the effective config the agents editor
+// needs. It is parsed from `nenya describe --json`, the authoritative merged
+// document, so the editor never reads a config file or a drop-in directly.
+type effectiveAgents struct {
+	Discovery struct {
+		AutoAgents *bool `json:"auto_agents"`
+	} `json:"discovery"`
+	Agents map[string]struct {
+		Strategy string   `json:"strategy"`
+		Models   []string `json:"models"`
+	} `json:"agents"`
+}
+
+// agentsFromEffective extracts the configured agents and the auto-agents flag
+// from the effective config JSON.
+func agentsFromEffective(effective []byte) ([]agentEntry, bool) {
+	var doc effectiveAgents
+	if err := json.Unmarshal(effective, &doc); err != nil {
+		return nil, false
+	}
+
+	names := make([]string, 0, len(doc.Agents))
+	for name := range doc.Agents {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	agents := make([]agentEntry, 0, len(names))
+	for _, name := range names {
+		a := doc.Agents[name]
+		strategy := a.Strategy
+		if strategy == "" {
+			strategy = "fallback"
+		}
+		agents = append(agents, agentEntry{Name: name, Strategy: strategy, Models: a.Models})
+	}
+
+	auto := false
+	if doc.Discovery.AutoAgents != nil {
+		auto = *doc.Discovery.AutoAgents
+	}
+	return agents, auto
 }
 
 func (m configModel) Init() tea.Cmd { return nil }
@@ -421,10 +419,9 @@ func (m *configModel) applyEdit() {
 
 	entry.Value.Value = parseLiteralValue(raw)
 
-	// Mark the source file as dirty using the active section (top-level key)
-	if src, ok := m.sources[m.activeSection]; ok {
-		m.dirty[src.filePath] = true
-	}
+	// Record the change by dotted key; the caller applies it through nenya's
+	// single writer. nenyactl does not choose the target file or merge.
+	m.changes[m.activeSection+"."+entry.Key] = string(parseLiteralValue(raw))
 }
 
 func (m *configModel) scrollSections() {
@@ -734,13 +731,15 @@ func isSectionObject(v *hujson.Value) bool {
 	return ok
 }
 
+// EditorResult is the set of changes the user made. It carries no file paths:
+// the caller applies each change through nenya's single writer, which owns the
+// target file and the merge.
 type EditorResult struct {
-	ConfigFile string
-	ConfigD    string
-	AgentsFile string
-	Config     *hujson.Value
-	Agents     []agentEntry
-	Dirty      map[string]bool
+	// Changes maps a dotted config key to its raw JSON value.
+	Changes map[string]string
+	// AgentsDirty reports whether the agents list changed; its value is in
+	// Changes["agents"] when set.
+	AgentsDirty bool
 }
 
 func (m *configModel) startEditAgent() {
@@ -784,13 +783,17 @@ func (m configModel) renderKeys() string {
 	return strings.Join(lines, "\n")
 }
 
-func RunConfigEditor(configFile, configD string) (*EditorResult, bool, error) {
-	cfg, err := jsonc.ReadFile(configFile)
+// RunConfigEditor runs the interactive editor over the effective config. The
+// caller supplies the authoritative effective document (from
+// `nenya describe --json`) and a display path, so the editor never reads or
+// merges config files itself.
+func RunConfigEditor(effective []byte, displayPath string) (*EditorResult, bool, error) {
+	cfg, err := jsonc.ParseDoc(effective)
 	if err != nil {
 		return nil, false, err
 	}
 
-	m := newConfigModel(cfg, configFile, configD)
+	m := newConfigModel(cfg, effective, displayPath)
 	m.loadDefaults()
 	m.updateSectionsContent()
 
@@ -809,17 +812,18 @@ func RunConfigEditor(configFile, configD string) (*EditorResult, bool, error) {
 		return nil, false, nil
 	}
 
-	resultData := &EditorResult{
-		ConfigFile: configFile,
-		ConfigD:    configD,
-		AgentsFile: m.agentsFile,
-		Config:     tm.config,
-		Agents:     tm.agents,
-		Dirty:      tm.dirty,
-	}
+	resultData := &EditorResult{Changes: tm.changes}
 
 	if tm.agentsDirty {
-		resultData.Dirty[tm.agentsFile] = true
+		value, err := AgentsValue(tm.agents)
+		if err != nil {
+			return nil, false, err
+		}
+		if resultData.Changes == nil {
+			resultData.Changes = make(map[string]string)
+		}
+		resultData.Changes["agents"] = value
+		resultData.AgentsDirty = true
 	}
 
 	return resultData, true, nil
@@ -862,7 +866,9 @@ func parseLiteralValue(raw string) hujson.Literal {
 	return hujson.Literal(fmt.Sprintf("%q", raw))
 }
 
-func WriteAgentsFile(path string, agents []agentEntry) error {
+// AgentsValue renders the agents list as the JSON value for the config's
+// top-level "agents" key, suitable for `nenya config set agents <json>`.
+func AgentsValue(agents []agentEntry) (string, error) {
 	agentsMap := make(map[string]any)
 	for _, a := range agents {
 		agentsMap[a.Name] = map[string]any{
@@ -870,15 +876,9 @@ func WriteAgentsFile(path string, agents []agentEntry) error {
 			"models":   a.Models,
 		}
 	}
-
-	data, err := json.MarshalIndent(agentsMap, "", "  ")
+	data, err := json.Marshal(agentsMap)
 	if err != nil {
-		return err
+		return "", err
 	}
-
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
+	return string(data), nil
 }

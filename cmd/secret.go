@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,24 +34,18 @@ API keys are used for client RBAC access.`,
 
 var (
 	secretType      string
-	secretOutput    string
 	secretForClient string
 )
 
 func init() {
 	secretGenCmd.Flags().StringVarP(&secretType, "type", "t", "client", "Secret type: client or apikey")
-	secretGenCmd.Flags().StringVarP(&secretOutput, "output", "o", "", "Write to secrets.json file instead of stdout")
 	secretGenCmd.Flags().StringVar(&secretForClient, "name", "", "Client name for API key (required with --type apikey)")
 }
 
 func runSecretGenerate(cmd *cobra.Command, args []string) error {
 	switch secretType {
 	case "client":
-		token := secrets.GenerateClientToken()
-		if secretOutput != "" {
-			return fmt.Errorf("write to file not implemented")
-		}
-		fmt.Println(token)
+		fmt.Println(secrets.GenerateClientToken())
 		return nil
 
 	case "apikey":
@@ -58,9 +53,6 @@ func runSecretGenerate(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("--name is required for --type apikey")
 		}
 		id, token := secrets.GenerateAPIKey()
-		if secretOutput != "" {
-			return fmt.Errorf("write to file not implemented")
-		}
 		fmt.Printf("ID:    %s\n", id)
 		fmt.Printf("Name:  %s\n", secretForClient)
 		fmt.Printf("Token: %s\n", token)
@@ -74,18 +66,22 @@ func runSecretGenerate(cmd *cobra.Command, args []string) error {
 var secretBootstrapCmd = &cobra.Command{
 	Use:   "bootstrap",
 	Short: "Create the initial client token",
-	Long: `Create the deployment's client-token file with a generated token.
+	Long: `Create the deployment's client token through nenya's single writer
+(nenya secret set), which chooses the secrets file, writes atomically, and
+fails closed when a systemd credential source is active.
 
-Container deployments write secrets/01-client.json (mounted as
-/run/secrets/nenya); bare metal writes <config-root>/secrets.json.
-Existing files are never overwritten.`,
+Existing tokens are overwritten only with --force.`,
 	RunE: runSecretBootstrap,
 }
 
-var bootstrapDir string
+var (
+	bootstrapDir   string
+	bootstrapForce bool
+)
 
 func init() {
 	secretBootstrapCmd.Flags().StringVar(&bootstrapDir, "dir", "", "Config root or container directory (default: system config root)")
+	secretBootstrapCmd.Flags().BoolVar(&bootstrapForce, "force", false, "Replace an existing client token")
 }
 
 func runSecretBootstrap(cmd *cobra.Command, args []string) error {
@@ -93,40 +89,115 @@ func runSecretBootstrap(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	secretsPath := res.Info.SecretsFile()
-	newFile, err := writeNewFile0600(secretsPath, []byte(fmt.Sprintf(`{
-  "client_token": "%s"
-}
-`, secrets.GenerateClientToken())))
-	if err != nil {
-		return err
-	}
-	if !newFile {
-		return fmt.Errorf("%s already exists, refusing to overwrite", secretsPath)
+
+	secretsDir := res.Info.SecretsDir()
+	if secretsDir == "" {
+		return fmt.Errorf("cannot determine the secrets directory for %s", res.Path)
 	}
 
-	fmt.Println(successStyle.Render("✓"), "Wrote", secretsPath)
-	fmt.Println(dimStyle.Render("  → Set your provider API keys before starting nenya"))
+	if !bootstrapForce {
+		if existing := existingTokenInDir(secretsDir); existing != "" {
+			return fmt.Errorf("client token already exists in %s; use --force to replace it", existing)
+		}
+	}
+
+	writer := res.Contract().SecretWriterFor(secretsDir)
+	path, err := writer.SetClientToken(cmd.Context(), "")
+	if err != nil {
+		return fmt.Errorf("secret bootstrap: %w", err)
+	}
+
+	fmt.Println(successStyle.Render("✓"), "Wrote client token to", path)
+	fmt.Println(dimStyle.Render("  → Set your provider API keys with: nenyactl secret set --provider <name> <key>"))
 
 	return nil
 }
 
-// writeNewFile0600 writes content with O_EXCL so an existing file is never
-// clobbered, and reports whether a new file was created.
-func writeNewFile0600(path string, content []byte) (bool, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return false, fmt.Errorf("create directory %s: %w", filepath.Dir(path), err)
+// secretSetCmd sets a provider key through nenya's single writer.
+var secretSetCmd = &cobra.Command{
+	Use:   "set --provider <name> <api-key>",
+	Short: "Set a provider API key",
+	Long: `Set a provider API key through nenya's single writer (nenya secret set),
+which chooses the secrets file, writes atomically, and fails closed when a
+systemd credential source is active.`,
+	RunE: runSecretSet,
+}
+
+var (
+	secretSetDir   string
+	secretSetProvi string
+)
+
+func init() {
+	secretCmd.AddCommand(secretSetCmd)
+	secretSetCmd.Flags().StringVar(&secretSetDir, "dir", "", "Config root or container directory (default: system config root)")
+	secretSetCmd.Flags().StringVar(&secretSetProvi, "provider", "", "Provider name whose key is set (required)")
+}
+
+func runSecretSet(cmd *cobra.Command, args []string) error {
+	if secretSetProvi == "" {
+		return fmt.Errorf("--provider is required")
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if len(args) != 1 {
+		return fmt.Errorf("usage: nenyactl secret set --provider <name> <api-key>")
+	}
+
+	res, err := resolveDir(secretSetDir, dirAttach, false)
 	if err != nil {
-		if os.IsExist(err) {
-			return false, nil
+		return err
+	}
+	secretsDir := res.Info.SecretsDir()
+	if secretsDir == "" {
+		return fmt.Errorf("cannot determine the secrets directory for %s", res.Path)
+	}
+
+	writer := res.Contract().SecretWriterFor(secretsDir)
+	path, err := writer.SetProviderKey(cmd.Context(), secretSetProvi, args[0])
+	if err != nil {
+		return fmt.Errorf("secret set: %w", err)
+	}
+
+	fmt.Println(successStyle.Render("✓"), "Provider key", secretSetProvi, "→", path)
+	return nil
+}
+
+// existingTokenInDir reports the path of a token file already present in dir,
+// or "" when none exists.
+func existingTokenInDir(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "secrets.json")); err == nil && hasClientToken(data) {
+		return filepath.Join(dir, "secrets.json")
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "secrets")); err == nil && hasClientToken(data) {
+		return filepath.Join(dir, "secrets")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
 		}
-		return false, fmt.Errorf("create %s: %w", path, err)
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		if hasClientToken(data) {
+			return filepath.Join(dir, e.Name())
+		}
 	}
-	if _, err := f.Write(content); err != nil {
-		_ = f.Close()
-		return false, fmt.Errorf("write %s: %w", path, err)
+	return ""
+}
+
+func hasClientToken(data []byte) bool {
+	var s struct {
+		ClientToken string `json:"client_token"`
 	}
-	return true, f.Close()
+	if err := json.Unmarshal(data, &s); err != nil {
+		return false
+	}
+	return s.ClientToken != ""
 }

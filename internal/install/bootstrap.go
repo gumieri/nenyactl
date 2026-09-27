@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gumieri/nenyactl/internal/secrets"
 )
@@ -113,10 +114,22 @@ type nenyaPaths struct {
 	Platform   string  `json:"platform"`
 }
 
+// probeTimeout bounds feature-detection probes. A released nenya that ignores
+// unknown subcommands would otherwise fall through to server startup and block
+// forever, so every probe is time-bounded and a timeout is treated as "absent".
+const probeTimeout = 5 * time.Second
+
+// probeOutput runs a feature-detection command with a bounded context.
+func probeOutput(ctx context.Context, runner CommandRunner, name string, args ...string) ([]byte, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	return runner.Output(probeCtx, name, args...)
+}
+
 // queryNenyaPaths feature-detects `nenya paths --json`. ok is false when the
 // command does not exist or does not produce parseable output.
 func queryNenyaPaths(ctx context.Context, runner CommandRunner, execPath string) (nenyaPaths, bool) {
-	out, err := runner.Output(ctx, execPath, "paths", "--json")
+	out, err := probeOutput(ctx, runner, execPath, "paths", "--json")
 	if err != nil || len(out) == 0 {
 		return nenyaPaths{}, false
 	}
@@ -132,7 +145,7 @@ func queryNenyaPaths(ctx context.Context, runner CommandRunner, execPath string)
 // documented minimal shim. It is the single source for both install and
 // `config init`, so the two paths cannot diverge.
 func BootstrapConfigContent(ctx context.Context, runner CommandRunner, execPath string) []byte {
-	if out, err := runner.Output(ctx, execPath, "example-config"); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+	if out, err := probeOutput(ctx, runner, execPath, "example-config"); err == nil && len(strings.TrimSpace(string(out))) > 0 {
 		return out
 	}
 	return []byte(minimalConfig)
@@ -165,6 +178,12 @@ func bootstrapSecrets(p installPaths) (bool, error) {
 		return false, fmt.Errorf("stat %s: %w", p.secretsFile, err)
 	}
 
+	if found := existingTokenInDir(p.secretsDir); found != "" {
+		fmt.Fprintf(os.Stderr, "Warning: a client token already exists in %s; not creating %s.\n", p.secretsDir, p.secretsFile)
+		fmt.Fprintln(os.Stderr, "Nenya would prefer the systemd-credential path, so set NENYA_SECRETS_DIR if you intend to use that copy.")
+		return false, nil
+	}
+
 	if err := os.MkdirAll(filepath.Dir(p.secretsFile), 0o700); err != nil {
 		return false, fmt.Errorf("create secrets dir %s: %w", filepath.Dir(p.secretsFile), err)
 	}
@@ -177,6 +196,46 @@ func bootstrapSecrets(p installPaths) (bool, error) {
 	}
 	content = append(content, '\n')
 	return writeNewFile(p.secretsFile, content, 0o600)
+}
+
+// existingTokenInDir reports the path of a token file already present in dir
+// (a wildcard secrets directory), or "" when none exists.
+func existingTokenInDir(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "secrets")); err == nil {
+		if hasClientToken(data) {
+			return filepath.Join(dir, "secrets")
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		if hasClientToken(data) {
+			return filepath.Join(dir, e.Name())
+		}
+	}
+	return ""
+}
+
+func hasClientToken(data []byte) bool {
+	var s struct {
+		ClientToken string `json:"client_token"`
+	}
+	if err := json.Unmarshal(data, &s); err != nil {
+		return false
+	}
+	return s.ClientToken != ""
 }
 
 // writeNewFile writes content to path only if it does not already exist, using

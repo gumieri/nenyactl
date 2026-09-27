@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/gumieri/nenyactl/internal/detect"
+	"github.com/gumieri/nenyactl/internal/nenya"
 	"github.com/gumieri/nenyactl/internal/paths"
 )
 
@@ -79,6 +80,24 @@ func resolveDir(dir string, mode dirMode, defaultContainer bool) (dirResolution,
 // deployment. Callers that write config must use this, never Path.
 func (r dirResolution) ConfigDir() string {
 	return filepath.Dir(r.Info.ConfigFile)
+}
+
+// Contract returns a nenya contract client pinned to the resolved config
+// directory, so every call (paths/describe/config set) targets the same root.
+func (r dirResolution) Contract() *nenya.Client {
+	return newContractClient(r.ConfigDir())
+}
+
+// newContractClient builds the nenya contract client for a config directory. It
+// is a package variable so tests can inject a fake Runner and exercise the
+// command wiring without a nenya binary installed.
+var newContractClient = func(dir string) *nenya.Client {
+	return nenya.New(nenya.Binary{}).WithConfigDir(dir)
+}
+
+// ContractForDir returns a client pinned to an explicit config directory.
+func contractForDir(dir string) *nenya.Client {
+	return newContractClient(dir)
 }
 
 func configRoot(dir string) dirResolution {

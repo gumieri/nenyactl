@@ -165,6 +165,7 @@ func TestRunContainerSetup(t *testing.T) {
 		defer func() { defaultExec = saved }()
 
 		containerSetupCfg.dir = t.TempDir()
+		fakeContractWriting(t, filepath.Join(containerSetupCfg.dir, "secrets"))
 		containerSetupCfg.listenAddr = ":8080"
 		containerSetupCfg.start = false
 		if err := runContainerSetup(nil, nil); err != nil {
@@ -227,6 +228,7 @@ func TestRunContainerStatus(t *testing.T) {
 func TestRunContainerSetupWithExec(t *testing.T) {
 	t.Run("creates directory structure and files", func(t *testing.T) {
 		tmp := t.TempDir()
+		fakeContractWriting(t, filepath.Join(tmp, "secrets"))
 		err := runContainerSetupWithExec(nil, tmp, ":8080", false)
 		if err != nil {
 			t.Fatalf("runContainerSetupWithExec() error = %v", err)
@@ -254,6 +256,7 @@ func TestRunContainerSetupWithExec(t *testing.T) {
 			},
 		}
 		tmp := t.TempDir()
+		fakeContractWriting(t, filepath.Join(tmp, "secrets"))
 		if err := runContainerSetupWithExec(ex, tmp, ":8080", true); err != nil {
 			t.Fatalf("runContainerSetupWithExec() error = %v", err)
 		}

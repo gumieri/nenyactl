@@ -1,18 +1,18 @@
 package cmd
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/gumieri/nenyactl/internal/containers"
 	ctpaths "github.com/gumieri/nenyactl/internal/paths"
-	"github.com/gumieri/nenyactl/internal/secrets"
 	"github.com/spf13/cobra"
 )
 
@@ -130,40 +130,33 @@ func runContainerSetupWithExec(ex execer, dir, listenAddr string, startAfter boo
 	}
 	fmt.Println(successStyle.Render("✓"), "Created config and compose.yml")
 
-	token := secrets.GenerateClientToken()
-	clientPath := filepath.Join(dir, "secrets", "01-client.json")
-	if err := os.MkdirAll(filepath.Dir(clientPath), 0o700); err != nil {
-		return fmt.Errorf("create secrets dir: %w", err)
-	}
-	created, err := writeNewFile0600(clientPath, []byte(fmt.Sprintf(`{
-  "client_token": "%s"
-}
-`, token)))
-	if err != nil {
-		return fmt.Errorf("write client secrets: %w", err)
-	}
-	if created {
-		fmt.Println(successStyle.Render("✓"), "Generated client token")
-	} else {
+	// Secrets are written through nenya's single writer against the host
+	// directory the compose mounts at /run/secrets/nenya, so the file and the
+	// container agree on the layout.
+	secretsDir := filepath.Join(dir, "secrets")
+	client := contractForDir(filepath.Join(dir, "config"))
+	writer := client.SecretWriterFor(secretsDir)
+
+	if existingTokenInDir(secretsDir) != "" {
 		fmt.Println(dimStyle.Render("  ∃"), "Kept existing client token")
+	} else {
+		if _, err := writer.SetClientToken(context.Background(), ""); err != nil {
+			return fmt.Errorf("generate client token: %w", err)
+		}
+		fmt.Println(successStyle.Render("✓"), "Generated client token")
 	}
 
-	providersPath := filepath.Join(dir, "secrets", "02-providers.json")
 	keys, err := containers.CollectProviderKeys()
 	if err != nil {
 		fmt.Println(dimStyle.Render("  TUI skipped or cancelled"))
 		keys = nil
 	}
+	for _, provider := range sortedKeys(keys) {
+		if _, err := writer.SetProviderKey(context.Background(), provider, keys[provider]); err != nil {
+			return fmt.Errorf("set provider key %s: %w", provider, err)
+		}
+	}
 	if len(keys) > 0 {
-		content, err := json.MarshalIndent(map[string]any{
-			"provider_keys": keys,
-		}, "", "  ")
-		if err != nil {
-			return fmt.Errorf("encode providers secrets: %w", err)
-		}
-		if err := os.WriteFile(providersPath, append(content, '\n'), 0o600); err != nil {
-			return fmt.Errorf("write providers secrets: %w", err)
-		}
 		fmt.Println(successStyle.Render("✓"), "Saved", len(keys), "provider keys")
 	}
 
@@ -303,4 +296,14 @@ func runContainerStatusWithExec(ex execer, dir string) error {
 	}
 
 	return nil
+}
+
+// sortedKeys returns the provider names in deterministic order.
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // scriptRunner returns canned output per full command line and records calls.
@@ -262,6 +263,32 @@ func TestInstallSecretsDirFromPaths(t *testing.T) {
 	}
 	if _, err := os.Stat("/run/secrets/nenya/secrets.json"); err == nil {
 		t.Error("install wrote a token into the wildcard secrets_dir")
+	}
+}
+
+// blockingRunner blocks until the context is done, simulating a released binary
+// that ignores an unknown subcommand and starts a server.
+type blockingRunner struct{}
+
+func (blockingRunner) Output(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestProbeOutputIsBounded(t *testing.T) {
+	start := time.Now()
+	_, err := probeOutput(context.Background(), blockingRunner{}, "/bin/nenya", "describe", "--json")
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	if elapsed := time.Since(start); elapsed > probeTimeout+2*time.Second {
+		t.Fatalf("probe took %s, want bounded near %s", elapsed, probeTimeout)
+	}
+}
+
+func TestQueryNenyaPathsTimesOut(t *testing.T) {
+	if _, ok := queryNenyaPaths(context.Background(), blockingRunner{}, "/bin/nenya"); ok {
+		t.Fatal("a hanging probe must be treated as absent")
 	}
 }
 

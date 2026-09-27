@@ -1,9 +1,8 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/gumieri/nenyactl/internal/agents"
 	"github.com/gumieri/nenyactl/internal/detect"
@@ -39,30 +38,33 @@ func runAgents(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--mode requires --dir")
 	}
 
-	var info *detect.Info
+	var res dirResolution
 	if agentsDir != "" {
-		res, err := resolveDir(agentsDir, dirAttach, false)
+		var err error
+		res, err = resolveDir(agentsDir, dirAttach, false)
 		if err != nil {
 			return err
 		}
-		info = res.Info
 		if agentsMode != "" {
 			mode, modeErr := parseAgentsMode(agentsMode)
 			if modeErr != nil {
 				return modeErr
 			}
-			info, err = detect.DetectFromDir(agentsDir, mode)
+			info, err := detect.DetectFromDir(agentsDir, mode)
 			if err != nil {
 				return err
 			}
+			res.Info = info
 		}
 	} else {
-		var err error
-		info, err = detect.Detect()
+		info, err := detect.Detect()
 		if err != nil {
 			return err
 		}
+		res = dirResolution{Path: info.ConfigFile, Info: info}
 	}
+
+	client := res.Contract()
 
 	useAuto, cfg, err := agents.RunAgentEditor()
 	if err != nil {
@@ -70,10 +72,11 @@ func runAgents(cmd *cobra.Command, args []string) error {
 	}
 
 	if useAuto {
-		if err := agents.UpdateConfigDiscovery(info.ConfigFile, true); err != nil {
-			return fmt.Errorf("update discovery: %w", err)
+		path, err := client.SetConfig(cmd.Context(), "discovery.auto_agents", "true")
+		if err != nil {
+			return fmt.Errorf("enable auto-agents: %w", err)
 		}
-		fmt.Println(successStyle.Render("✓"), "Auto-agents enabled")
+		fmt.Println(successStyle.Render("✓"), "Auto-agents enabled →", path)
 		return nil
 	}
 
@@ -81,46 +84,23 @@ func runAgents(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	if dropInActive(info) {
-		if err := agents.WriteAgentsConfig(info.ConfigD, cfg); err != nil {
-			return fmt.Errorf("write agents config: %w", err)
-		}
-		fmt.Println(successStyle.Render("✓"), "Custom agents saved to", info.ConfigD)
-	} else {
-		// config.d is not the active layout: merging into config.json keeps
-		// the user's config readable on every nenya version (CONTRACT.md §5.1).
-		if err := agents.WriteAgentsIntoConfig(info.ConfigFile, cfg); err != nil {
-			return fmt.Errorf("write agents into config: %w", err)
-		}
-		fmt.Println(successStyle.Render("✓"), "Custom agents merged into", info.ConfigFile)
+	agentsJSON, err := json.Marshal(cfg["agents"])
+	if err != nil {
+		return fmt.Errorf("encode agents: %w", err)
 	}
+	path, err := client.SetConfig(cmd.Context(), "agents", string(agentsJSON))
+	if err != nil {
+		return fmt.Errorf("write agents: %w", err)
+	}
+	fmt.Println(successStyle.Render("✓"), "Custom agents saved →", path)
 
-	if err := agents.UpdateConfigDiscovery(info.ConfigFile, false); err != nil {
-		return fmt.Errorf("update discovery: %w", err)
+	if path, err := client.SetConfig(cmd.Context(), "discovery.auto_agents", "false"); err != nil {
+		return fmt.Errorf("disable auto-agents: %w", err)
+	} else {
+		fmt.Println(successStyle.Render("✓"), "Auto-agents disabled →", path)
 	}
-	fmt.Println(successStyle.Render("✓"), "Auto-agents disabled")
 
 	return nil
-}
-
-// dropInActive reports whether config.d is already the active layout, i.e. it
-// contains at least one *.json (excluding secrets.json). Writing a drop-in is
-// only safe in that case; otherwise it would make nenya ignore config.json on
-// released <=0.15 builds.
-func dropInActive(info *detect.Info) bool {
-	if info.ConfigD == "" {
-		return false
-	}
-	entries, err := os.ReadDir(info.ConfigD)
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		if !e.IsDir() && filepath.Ext(e.Name()) == ".json" && e.Name() != "secrets.json" {
-			return true
-		}
-	}
-	return false
 }
 
 // parseAgentsMode maps an explicit --mode value to a detect.Mode.

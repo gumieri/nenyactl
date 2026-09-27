@@ -1,10 +1,7 @@
 package agents
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -13,9 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gumieri/nenyactl/internal/jsonc"
 	"github.com/gumieri/nenyactl/internal/tui"
-	"github.com/tailscale/hujson"
 )
 
 type screen int
@@ -777,62 +772,6 @@ func RunAgentEditor() (bool, map[string]any, error) {
 	}
 
 	return false, cfg, nil
-}
-
-// WriteAgentsConfig writes custom agents as a config.d drop-in. Callers must
-// only use this when config.d is already the active layout (see
-// ShouldWriteDropIn), because on released nenya <=0.15 a drop-in beside a
-// config.json makes nenya ignore config.json entirely.
-func WriteAgentsConfig(configDir string, cfg map[string]any) error {
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		return err
-	}
-
-	path := filepath.Join(configDir, "20-agents.json")
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
-}
-
-// WriteAgentsIntoConfig merges the custom agents into a single config.json,
-// preserving unrelated keys and comments. It is the safe choice when config.d
-// is not already the active layout.
-func WriteAgentsIntoConfig(configFile string, cfg map[string]any) error {
-	v, err := jsonc.ReadFile(configFile)
-	if err != nil {
-		return err
-	}
-	agentsCfg, ok := cfg["agents"]
-	if !ok {
-		return fmt.Errorf("agents config has no \"agents\" key")
-	}
-	if err := jsonc.SetValueFromAny(v, "agents", agentsCfg); err != nil {
-		return err
-	}
-	return jsonc.WriteFile(configFile, v, 0o644)
-}
-
-func UpdateConfigDiscovery(configFile string, autoAgents bool) error {
-	v, err := jsonc.ReadFile(configFile)
-	if err != nil {
-		return err
-	}
-
-	if !jsonc.SetNestedField(v, []string{"discovery", "auto_agents"}, hujson.Literal(fmt.Sprintf("%v", autoAgents))) {
-		if _, ok := jsonc.GetField(v, "discovery"); ok {
-			return fmt.Errorf("config.discovery is not a map")
-		}
-		jsonc.SetField(v, "discovery", hujson.Literal(fmt.Sprintf(`{"auto_agents": %v}`, autoAgents)))
-	}
-
-	return jsonc.WriteFile(configFile, v, 0o644)
 }
 
 func init() {

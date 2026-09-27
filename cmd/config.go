@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/gumieri/nenyactl/internal/config"
 	"github.com/gumieri/nenyactl/internal/detect"
 	"github.com/gumieri/nenyactl/internal/install"
-	"github.com/gumieri/nenyactl/internal/jsonc"
 	"github.com/gumieri/nenyactl/internal/paths"
 	"github.com/spf13/cobra"
 )
@@ -94,51 +94,58 @@ func init() {
 }
 
 func runConfigEdit(cmd *cobra.Command, args []string) error {
-	var configFile string
-	var configD string
-
+	var res dirResolution
 	if configEditDir != "" {
-		res, err := resolveDir(configEditDir, dirAttach, false)
+		var err error
+		res, err = resolveDir(configEditDir, dirAttach, false)
 		if err != nil {
 			return err
 		}
-		configFile = res.Info.ConfigFile
-		configD = res.Info.ConfigD
 	} else {
 		info, err := detect.Detect()
 		if err != nil {
 			return err
 		}
-		configFile = info.ConfigFile
-		configD = info.ConfigD
+		res = dirResolution{Path: info.ConfigFile, Info: info}
 	}
 
-	if _, err := os.Stat(configFile); err != nil {
-		return fmt.Errorf("config file not found: %s\n\n  Create with: nenyactl config init", configFile)
+	client := res.Contract()
+
+	desc, err := client.Describe(cmd.Context())
+	if err != nil {
+		return fmt.Errorf("read effective config (is nenya installed?): %w", err)
+	}
+	if len(desc.Config) == 0 {
+		return fmt.Errorf("nenya describe returned no config for %s", res.ConfigDir())
 	}
 
-	fmt.Println(infoStyle.Render("›"), "Editing:", configFile)
+	fmt.Println(infoStyle.Render("›"), "Editing:", res.ConfigDir())
 
-	result, changed, err := config.RunConfigEditor(configFile, configD)
+	result, changed, err := config.RunConfigEditor(desc.Config, res.Info.ConfigFile)
 	if err != nil {
 		return fmt.Errorf("editor: %w", err)
 	}
 
-	if !changed {
+	if !changed || len(result.Changes) == 0 {
 		fmt.Println(infoStyle.Render("›"), "No changes made")
 		return nil
 	}
 
-	if err := jsonc.WriteFile(result.ConfigFile, result.Config, 0o644); err != nil {
-		return fmt.Errorf("save config: %w", err)
+	// Apply every change through nenya's single writer. nenya chooses the
+	// target file (managed drop-in or config file), merges, and writes
+	// atomically, so nenyactl never reproduces the loader or the merge.
+	keys := make([]string, 0, len(result.Changes))
+	for k := range result.Changes {
+		keys = append(keys, k)
 	}
-	fmt.Println(successStyle.Render("✓"), "Config saved:", result.ConfigFile)
+	sort.Strings(keys)
 
-	if dirty, ok := result.Dirty[result.AgentsFile]; ok && dirty {
-		if err := config.WriteAgentsFile(result.AgentsFile, result.Agents); err != nil {
-			return fmt.Errorf("save agents: %w", err)
+	for _, key := range keys {
+		path, err := client.SetConfig(cmd.Context(), key, result.Changes[key])
+		if err != nil {
+			return fmt.Errorf("apply %s: %w", key, err)
 		}
-		fmt.Println(successStyle.Render("✓"), "Agents saved:", result.AgentsFile)
+		fmt.Println(successStyle.Render("✓"), key, "→", path)
 	}
 
 	return nil

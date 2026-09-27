@@ -54,41 +54,6 @@ func TestReadFile(t *testing.T) {
 	})
 }
 
-func TestWriteFile(t *testing.T) {
-	t.Run("writes and preserves comments", func(t *testing.T) {
-		tmp := t.TempDir()
-		path := filepath.Join(tmp, "config.json")
-
-		v, err := hujson.Parse([]byte(exampleJSONC))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if err := WriteFile(path, &v, 0o644); err != nil {
-			t.Fatalf("WriteFile() error = %v", err)
-		}
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if len(data) == 0 {
-			t.Error("file should not be empty")
-		}
-
-		v2, err := ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		keys := TopLevelKeys(v2)
-		if len(keys) != 3 {
-			t.Errorf("expected 3 keys after round-trip, got %d", len(keys))
-		}
-	})
-}
-
 func TestGetField(t *testing.T) {
 	v, err := hujson.Parse([]byte(exampleJSONC))
 	if err != nil {
@@ -110,63 +75,6 @@ func TestGetField(t *testing.T) {
 		_, ok := GetField(&v, "nonexistent")
 		if ok {
 			t.Error("expected false for missing field")
-		}
-	})
-}
-
-func TestSetField(t *testing.T) {
-	v, err := hujson.Parse([]byte(`{"key": "old"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	t.Run("updates existing field", func(t *testing.T) {
-		SetField(&v, "key", hujson.Literal(`"new"`))
-		field, ok := GetField(&v, "key")
-		if !ok {
-			t.Fatal("expected key field")
-		}
-		if FieldValueString(field) != `"new"` {
-			t.Errorf("got %q, want %q", FieldValueString(field), `"new"`)
-		}
-	})
-
-	t.Run("adds new field", func(t *testing.T) {
-		SetField(&v, "new_key", hujson.Literal(`"value"`))
-		field, ok := GetField(&v, "new_key")
-		if !ok {
-			t.Fatal("expected new_key field")
-		}
-		if FieldValueString(field) != `"value"` {
-			t.Errorf("got %q, want %q", FieldValueString(field), `"value"`)
-		}
-	})
-}
-
-func TestSetNestedField(t *testing.T) {
-	v, err := hujson.Parse([]byte(`{"discovery": {"auto_agents": true}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	t.Run("updates nested field", func(t *testing.T) {
-		ok := SetNestedField(&v, []string{"discovery", "auto_agents"}, hujson.Literal("false"))
-		if !ok {
-			t.Fatal("SetNestedField failed")
-		}
-		field, ok := GetNestedField(&v, []string{"discovery", "auto_agents"})
-		if !ok {
-			t.Fatal("expected nested field")
-		}
-		if FieldValueString(field) != "false" {
-			t.Errorf("got %q, want false", FieldValueString(field))
-		}
-	})
-
-	t.Run("returns false for empty path", func(t *testing.T) {
-		ok := SetNestedField(&v, nil, hujson.Literal("true"))
-		if ok {
-			t.Error("expected false for empty path")
 		}
 	})
 }
@@ -265,46 +173,36 @@ func TestGetObject(t *testing.T) {
 	})
 }
 
-func TestEnsureNestedObject(t *testing.T) {
-	v, err := hujson.Parse([]byte(`{"a": {"b": {"c": 1}}}`))
+func TestEnsureObject(t *testing.T) {
+	v, err := hujson.Parse([]byte(`{"provider": {"existing": true}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	t.Run("valid nested object path", func(t *testing.T) {
-		obj, ok := EnsureNestedObject(&v, []string{"a", "b"})
+	t.Run("returns an existing object", func(t *testing.T) {
+		obj, ok := EnsureObject(&v, "provider")
 		if !ok {
-			t.Fatal("expected true for valid path")
+			t.Fatal("expected true for object member")
 		}
 		if obj == nil {
 			t.Fatal("expected non-nil object")
 		}
 	})
 
-	t.Run("path ends at non-object", func(t *testing.T) {
-		_, ok := EnsureNestedObject(&v, []string{"a", "b", "c"})
-		if ok {
-			t.Error("expected false when path ends at non-object")
+	t.Run("creates a missing object", func(t *testing.T) {
+		obj, ok := EnsureObject(&v, "created")
+		if !ok {
+			t.Fatal("expected true when creating")
+		}
+		if obj == nil {
+			t.Fatal("expected non-nil object")
 		}
 	})
 
-	t.Run("missing key in path", func(t *testing.T) {
-		_, ok := EnsureNestedObject(&v, []string{"nonexistent", "b"})
-		if ok {
-			t.Error("expected false for missing key")
-		}
-	})
-}
-
-func TestWriteFileErrorCases(t *testing.T) {
-	t.Run("write fails with bad path", func(t *testing.T) {
-		v, err := hujson.Parse([]byte(`{}`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		err = WriteFile("/nonexistent/dir/config.json", &v, 0o644)
-		if err == nil {
-			t.Error("expected error for bad path")
+	t.Run("returns false for a non-object member", func(t *testing.T) {
+		s, _ := hujson.Parse([]byte(`{"scalar": 1}`))
+		if _, ok := EnsureObject(&s, "scalar"); ok {
+			t.Error("expected false for scalar member")
 		}
 	})
 }

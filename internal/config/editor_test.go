@@ -56,7 +56,7 @@ func TestNewConfigModel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg, "/tmp/config.json", t.TempDir())
+	m := newConfigModel(cfg, cfg.Pack(), "/tmp/config.json")
 	if len(m.sections) == 0 {
 		t.Error("expected non-empty sections")
 	}
@@ -71,7 +71,7 @@ func TestLoadSection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg, "/tmp/config.json", t.TempDir())
+	m := newConfigModel(cfg, cfg.Pack(), "/tmp/config.json")
 	if len(m.sections) == 0 {
 		t.Fatal("no sections")
 	}
@@ -94,7 +94,7 @@ func TestApplyEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg, path, t.TempDir())
+	m := newConfigModel(cfg, []byte(testConfig), path)
 	m.loadSection("governance")
 	if len(m.entries) == 0 {
 		t.Fatal("expected entries")
@@ -126,7 +126,7 @@ func TestApplyEditPreservesComments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg, path, t.TempDir())
+	m := newConfigModel(cfg, []byte(testConfig), path)
 	m.loadSection("governance")
 	m.cursor = 0
 	m.editInput.SetValue("500000")
@@ -163,5 +163,42 @@ func TestIsSectionObject(t *testing.T) {
 		if _, ok := field.Value.(*hujson.Object); ok && !isObj {
 			t.Errorf("isSectionObject(%s) = false, want true", key)
 		}
+	}
+}
+
+func TestAgentsFromEffective(t *testing.T) {
+	effective := []byte(`{
+	  "discovery": {"auto_agents": false},
+	  "agents": {
+	    "build": {"strategy": "fallback", "models": ["m1", "m2"]},
+	    "review": {"strategy": "round_robin"}
+	  }
+	}`)
+
+	agents, auto := agentsFromEffective(effective)
+	if auto {
+		t.Error("auto_agents should be false")
+	}
+	if len(agents) != 2 {
+		t.Fatalf("got %d agents, want 2", len(agents))
+	}
+	if agents[0].Name != "build" || agents[1].Name != "review" {
+		t.Errorf("agents not sorted by name: %v", agents)
+	}
+	if agents[0].Strategy != "fallback" || len(agents[0].Models) != 2 {
+		t.Errorf("build agent parsed wrong: %+v", agents[0])
+	}
+	if agents[1].Strategy != "round_robin" || len(agents[1].Models) != 0 {
+		t.Errorf("review agent parsed wrong: %+v", agents[1])
+	}
+}
+
+func TestAgentsFromEffectiveAutoFlag(t *testing.T) {
+	agents, auto := agentsFromEffective([]byte(`{"discovery":{"auto_agents":true}}`))
+	if !auto {
+		t.Error("auto_agents should be true")
+	}
+	if len(agents) != 0 {
+		t.Errorf("expected no agents, got %v", agents)
 	}
 }

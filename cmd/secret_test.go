@@ -1,13 +1,72 @@
 package cmd
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/gumieri/nenyactl/internal/nenya"
 	"github.com/spf13/cobra"
 )
+
+// recordingRunner is a nenya.Runner that records every invocation and emulates
+// the contract. It lets the secret commands be tested without a nenya binary.
+type recordingRunner struct {
+	calls  [][]string
+	out    []byte
+	err    error
+	onCall func(args []string)
+}
+
+func (r *recordingRunner) Output(_ context.Context, args ...string) ([]byte, error) {
+	r.calls = append(r.calls, append([]string(nil), args...))
+	if r.onCall != nil {
+		r.onCall(args)
+	}
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.out, nil
+}
+
+// fakeContract points newContractClient at rr for the test and returns a pointer
+// to the config directory the command pinned.
+func fakeContract(t *testing.T, rr *recordingRunner) *string {
+	t.Helper()
+	dir := new(string)
+	saved := newContractClient
+	newContractClient = func(d string) *nenya.Client {
+		*dir = d
+		return nenya.New(rr).WithConfigDir(d)
+	}
+	t.Cleanup(func() { newContractClient = saved })
+	return dir
+}
+
+// testCmd returns a command with a non-nil context, mirroring what cobra
+// provides when a command actually runs.
+func testCmd() *cobra.Command {
+	c := &cobra.Command{}
+	c.SetContext(context.Background())
+	return c
+}
+
+// fakeContractWriting points the contract seam at a runner that materializes a
+// client token file under secretsDir when `secret set --client-token` runs,
+// emulating nenya's writer so container setup can be tested without a binary.
+func fakeContractWriting(t *testing.T, secretsDir string) *recordingRunner {
+	t.Helper()
+	rr := &recordingRunner{onCall: func(args []string) {
+		if len(args) >= 3 && args[0] == "secret" && args[1] == "set" && args[2] == "--client-token" {
+			_ = os.MkdirAll(secretsDir, 0o700)
+			_ = os.WriteFile(filepath.Join(secretsDir, "01-client.json"), []byte(`{"client_token":"nk-fake"}`), 0o600)
+		}
+	}}
+	fakeContract(t, rr)
+	return rr
+}
 
 func TestRunSecretGenerate(t *testing.T) {
 	t.Run("generates client token", func(t *testing.T) {
@@ -49,36 +108,49 @@ func TestRunSecretGenerate(t *testing.T) {
 }
 
 func TestRunSecretBootstrap(t *testing.T) {
-	t.Run("creates secrets file", func(t *testing.T) {
+	t.Run("delegates token creation to the contract", func(t *testing.T) {
 		tmp := t.TempDir()
 		bootstrapDir = tmp
-		err := runSecretBootstrap(&cobra.Command{}, nil)
-		if err != nil {
+		bootstrapForce = false
+
+		rr := &recordingRunner{out: []byte(filepath.Join(tmp, "secrets.json"))}
+		dir := fakeContract(t, rr)
+
+		if err := runSecretBootstrap(testCmd(), nil); err != nil {
 			t.Fatalf("runSecretBootstrap() error = %v", err)
 		}
-		path := filepath.Join(tmp, "secrets.json")
-		info, err := os.Stat(path)
-		if err != nil {
-			t.Fatalf("client secrets not created: %v", err)
+		if *dir != tmp {
+			t.Errorf("contract pinned to %q, want %q", *dir, tmp)
 		}
-		if info.Mode().Perm() != 0o600 {
-			t.Errorf("mode = %o, want 0600", info.Mode().Perm())
+		if len(rr.calls) != 1 {
+			t.Fatalf("got %d contract calls, want 1: %v", len(rr.calls), rr.calls)
+		}
+		want := []string{"secret", "set", "--client-token"}
+		if strings.Join(rr.calls[0], " ") != strings.Join(want, " ") {
+			t.Errorf("call = %v, want %v", rr.calls[0], want)
 		}
 	})
 
-	t.Run("refuses to overwrite existing", func(t *testing.T) {
+	t.Run("refuses to replace an existing token", func(t *testing.T) {
 		tmp := t.TempDir()
-		if err := os.WriteFile(filepath.Join(tmp, "secrets.json"), []byte("{}"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(tmp, "secrets.json"), []byte(`{"client_token":"nk-existing"}`), 0o600); err != nil {
 			t.Fatalf("write secrets: %v", err)
 		}
 		bootstrapDir = tmp
-		err := runSecretBootstrap(&cobra.Command{}, nil)
-		if err == nil {
-			t.Fatal("expected error for existing file")
+		bootstrapForce = false
+
+		rr := &recordingRunner{}
+		fakeContract(t, rr)
+
+		if err := runSecretBootstrap(testCmd(), nil); err == nil {
+			t.Fatal("expected error for existing token")
+		}
+		if len(rr.calls) != 0 {
+			t.Errorf("contract must not be called when a token exists: %v", rr.calls)
 		}
 	})
 
-	t.Run("container dir writes into secrets/", func(t *testing.T) {
+	t.Run("container layout pins the nested config dir", func(t *testing.T) {
 		tmp := t.TempDir()
 		if err := os.MkdirAll(filepath.Join(tmp, "config"), 0o755); err != nil {
 			t.Fatal(err)
@@ -87,14 +159,53 @@ func TestRunSecretBootstrap(t *testing.T) {
 			t.Fatal(err)
 		}
 		bootstrapDir = tmp
-		if err := runSecretBootstrap(&cobra.Command{}, nil); err != nil {
+		bootstrapForce = false
+
+		rr := &recordingRunner{out: []byte(filepath.Join(tmp, "secrets", "01-client.json"))}
+		dir := fakeContract(t, rr)
+
+		if err := runSecretBootstrap(testCmd(), nil); err != nil {
 			t.Fatalf("runSecretBootstrap() error = %v", err)
 		}
-		if _, err := os.Stat(filepath.Join(tmp, "secrets", "01-client.json")); err != nil {
-			t.Errorf("expected secrets/01-client.json: %v", err)
+		if want := filepath.Join(tmp, "config"); *dir != want {
+			t.Errorf("contract pinned to %q, want %q", *dir, want)
 		}
-		if _, err := os.Stat(filepath.Join(tmp, "secrets.json")); err == nil {
-			t.Error("must not write root-level secrets.json for a container layout")
+	})
+}
+
+func TestRunSecretSet(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, "config.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	secretSetDir = tmp
+	secretSetProvi = "openai"
+
+	rr := &recordingRunner{out: []byte(filepath.Join(tmp, "secrets.json"))}
+	dir := fakeContract(t, rr)
+
+	if err := runSecretSet(testCmd(), []string{"sk-test"}); err != nil {
+		t.Fatalf("runSecretSet() error = %v", err)
+	}
+	if *dir != tmp {
+		t.Errorf("contract pinned to %q, want %q", *dir, tmp)
+	}
+	want := []string{"secret", "set", "--provider", "openai", "sk-test"}
+	if len(rr.calls) != 1 || strings.Join(rr.calls[0], " ") != strings.Join(want, " ") {
+		t.Errorf("calls = %v, want one call %v", rr.calls, want)
+	}
+
+	t.Run("requires --provider", func(t *testing.T) {
+		secretSetProvi = ""
+		if err := runSecretSet(testCmd(), []string{"sk-test"}); err == nil {
+			t.Fatal("expected error without --provider")
+		}
+		secretSetProvi = "openai"
+	})
+
+	t.Run("requires exactly one argument", func(t *testing.T) {
+		if err := runSecretSet(testCmd(), nil); err == nil {
+			t.Fatal("expected error without an api key")
 		}
 	})
 }
