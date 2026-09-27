@@ -193,14 +193,15 @@ func checkSecrets(res dirResolution, desc nenya.Description, haveDesc bool) chec
 
 	// Check permissions on every secrets file, not just the token-bearing one.
 	files := secretFilesIn(dir, res.Info.ConfigFile)
-	var loose []string
+	var loose, looseModes []string
 	for _, f := range files {
 		if info, err := os.Stat(f); err == nil && info.Mode().Perm()&0o077 != 0 {
 			loose = append(loose, f)
+			looseModes = append(looseModes, fmt.Sprintf("%s (%04o)", f, info.Mode().Perm()))
 		}
 	}
 	if len(loose) > 0 {
-		return checkResult{Name: "secrets", Status: checkFail, Detail: "world/group-readable: " + strings.Join(loose, ", "), Fix: "chmod 600 " + shellQuoteAll(loose)}
+		return checkResult{Name: "secrets", Status: checkFail, Detail: "world/group-readable: " + strings.Join(looseModes, ", "), Fix: "chmod 600 " + shellQuoteAll(loose)}
 	}
 	return checkResult{Name: "secrets", Status: checkOK, Detail: fmt.Sprintf("%d file(s) in %s", len(files), dir)}
 }

@@ -29,11 +29,12 @@ Use --dir to act on a specific deployment root instead of auto-detecting.`,
 }
 
 var (
-	upDir        string
-	upWait       time.Duration
-	upInstall    = install.Install
-	upServiceRun = func() error { return runServiceStartWithExec(defaultExec) }
-	upDetect     = detect.Detect
+	upDir           string
+	upWait          time.Duration
+	upInstall       = install.Install
+	upServiceRun    = func() error { return runServiceStartWithExec(defaultExec) }
+	upServiceReload = func() error { return runServiceReloadWithExec(defaultExec) }
+	upDetect        = detect.Detect
 )
 
 func init() {
@@ -120,15 +121,15 @@ func upDeployment(ctx context.Context, res dirResolution, doer healthDoer, healt
 	if descErr != nil {
 		fmt.Println(dimStyle.Render("  (could not read the effective config: " + descErr.Error() + ")"))
 	}
-	ensureProviderKeys(ctx, res, desc, descErr)
+	wroteKeys := ensureProviderKeys(ctx, res, desc, descErr)
 
 	if err := startDeployment(res); err != nil {
 		return err
 	}
 	// Keys saved above are not loaded by an already-running service; nudge it
 	// to reload so the just-configured providers take effect.
-	if res.Kind == dirConfigRoot && len(desc.Providers.Configured) == 0 {
-		if err := runServiceReloadWithExec(defaultExec); err != nil {
+	if wroteKeys {
+		if err := upServiceReload(); err != nil {
 			fmt.Println(dimStyle.Render("  (could not reload the service: " + err.Error() + ")"))
 		}
 	}
@@ -169,29 +170,32 @@ func ensureClientToken(ctx context.Context, res dirResolution) error {
 	return nil
 }
 
-// ensureProviderKeys prompts for provider keys when none are configured. The
-// prompt is best-effort: without a terminal it is skipped, and it is skipped
-// entirely when the contract could not be read, since we cannot know what the
-// running nenya understands.
-func ensureProviderKeys(ctx context.Context, res dirResolution, desc nenya.Description, descErr error) {
+// ensureProviderKeys prompts for provider keys when none are configured and
+// reports whether it saved any. The prompt is best-effort: without a terminal
+// it is skipped, and it is skipped entirely when the contract could not be
+// read, since we cannot know what the running nenya understands.
+func ensureProviderKeys(ctx context.Context, res dirResolution, desc nenya.Description, descErr error) bool {
 	if descErr != nil {
-		return
+		return false
 	}
 	if len(desc.Providers.Configured) > 0 {
-		return
+		return false
 	}
 	keys, err := containers.CollectProviderKeys()
 	if err != nil || len(keys) == 0 {
-		return
+		return false
 	}
 	writer := res.Contract().SecretWriterFor(res.Info.SecretsDir())
+	wrote := false
 	for _, provider := range sortedStringKeys(keys) {
 		if _, err := writer.SetProviderKey(ctx, provider, keys[provider]); err != nil {
 			fmt.Println(errorStyle.Render("✗"), "Could not set provider key", provider+":", err)
 			continue
 		}
+		wrote = true
 		fmt.Println(successStyle.Render("✓"), "Saved provider key", provider)
 	}
+	return wrote
 }
 
 // startDeployment starts the resolved deployment: compose for a container root,

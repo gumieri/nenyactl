@@ -67,6 +67,9 @@ func TestUpDeployment(t *testing.T) {
 	savedStart := upServiceRun
 	upServiceRun = func() error { return nil }
 	t.Cleanup(func() { upServiceRun = savedStart })
+	savedReload := upServiceReload
+	upServiceReload = func() error { return nil }
+	t.Cleanup(func() { upServiceReload = savedReload })
 
 	if err := upDeployment(context.Background(), res, fakeDoer{status: http.StatusOK}, time.Second); err != nil {
 		t.Fatalf("upDeployment: %v", err)
@@ -99,6 +102,9 @@ func TestUpDeploymentCreatesMissingConfig(t *testing.T) {
 	savedStart := upServiceRun
 	upServiceRun = func() error { return nil }
 	t.Cleanup(func() { upServiceRun = savedStart })
+	savedReload := upServiceReload
+	upServiceReload = func() error { return nil }
+	t.Cleanup(func() { upServiceReload = savedReload })
 
 	if err := upDeployment(context.Background(), res, fakeDoer{status: http.StatusOK}, time.Second); err != nil {
 		t.Fatalf("upDeployment: %v", err)
