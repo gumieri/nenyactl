@@ -38,10 +38,11 @@ matrix against OpenCode, and a supply-chain surface for no functional gain.
 ## Decision
 
 - nenyactl generates the V2 provider block (`nenyactl client add opencode`).
-  With `--write`, `client add opencode --write` merges it into
-  `~/.config/opencode/opencode.json` preserving unrelated keys and comments;
-  without it, the redacted snippet is printed. `up`/`install --connect` print
-  the client connection info with a pointer to `client add --show-token`.
+  Output modes: default prints a redacted snippet; `--show-token` prints it with
+  the real token; `-o/--output` writes it to a 0600 file; `--write` merges it
+  into `~/.config/opencode/opencode.json`, preserving unrelated keys and
+  comments. `up`/`install --connect` print the client connection info with a
+  pointer to `client add --show-token`.
 - No npm scope, no plugin package. Revisit only if OpenCode adds a
   provider-registration hook that a plugin could use.
 - The generated shape is pinned by `TestRenderOpenCodeUsesV2Shape` so a V1

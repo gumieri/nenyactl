@@ -144,10 +144,11 @@ func aider(base, token string) Snippet {
 	}
 }
 
-// MergeOpenCodeProvider updates an existing OpenCode config's
-// providers.nenya object, preserving every other key and any JSONC comments. It
-// returns the full merged document and whether a legacy V1 provider.nenya was
-// removed. Existing config that is not a JSON object is rejected.
+// MergeOpenCodeProvider regenerates the providers.nenya object in an existing
+// OpenCode config, preserving every other key and any JSONC comments. It returns
+// the full merged document and whether a legacy V1 provider.nenya was removed.
+// providers.nenya itself is replaced wholesale, since it is generated from the
+// resolved endpoint. Existing config that is not a JSON object is rejected.
 func MergeOpenCodeProvider(existing []byte, ep Endpoint) ([]byte, bool, error) {
 	base := strings.TrimRight(ep.BaseURL, "/")
 	snippet, err := openCode(base, ep.Token)
@@ -159,7 +160,8 @@ func MergeOpenCodeProvider(existing []byte, ep Endpoint) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	if _, ok := jsonc.GetObject(v); !ok {
+	root, ok := jsonc.GetObject(v)
+	if !ok {
 		return nil, false, fmt.Errorf("existing opencode.json is not a JSON object")
 	}
 
@@ -185,11 +187,15 @@ func MergeOpenCodeProvider(existing []byte, ep Endpoint) ([]byte, bool, error) {
 	}
 
 	// Migrate away from the V1 shape: drop a legacy top-level provider.nenya so
-	// an upgrading user does not end up with both blocks.
+	// an upgrading user does not end up with both blocks, and drop the now-empty
+	// provider object entirely.
 	removedLegacy := false
 	if legacyProvider, ok := jsonc.GetNestedField(v, []string{"provider"}); ok {
 		if legacyObj, ok := jsonc.GetObject(legacyProvider); ok {
 			removedLegacy = jsonc.DeleteMember(legacyObj, "nenya")
+			if removedLegacy && len(legacyObj.Members) == 0 {
+				jsonc.DeleteMember(root, "provider")
+			}
 		}
 	}
 

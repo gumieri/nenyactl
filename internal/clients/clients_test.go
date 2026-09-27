@@ -186,6 +186,28 @@ func TestMergeOpenCodeMigratesLegacyV1(t *testing.T) {
 	}
 }
 
+func TestMergeOpenCodeDropsEmptyLegacyProvider(t *testing.T) {
+	existing := []byte(`{"provider": {"nenya": {"npm": "@ai-sdk/openai-compatible"}}}`)
+	merged, removed, err := MergeOpenCodeProvider(existing, testEndpoint())
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	if !removed {
+		t.Error("expected the legacy provider.nenya to be reported as removed")
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(merged, &root); err != nil {
+		t.Fatalf("merged output invalid JSON: %v", err)
+	}
+	if _, ok := root["provider"]; ok {
+		t.Errorf("empty legacy provider object was left behind:\n%s", merged)
+	}
+	if _, ok := root["providers"].(map[string]any)["nenya"]; !ok {
+		t.Error("V2 nenya provider not added")
+	}
+}
+
 func TestMergeOpenCodePreservesComments(t *testing.T) {
 	existing := []byte("{\n  // user comment\n  \"theme\": \"dark\"\n}\n")
 	merged, _, err := MergeOpenCodeProvider(existing, testEndpoint())

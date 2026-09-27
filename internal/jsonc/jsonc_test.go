@@ -3,6 +3,7 @@ package jsonc
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tailscale/hujson"
@@ -118,6 +119,9 @@ func TestDeleteMember(t *testing.T) {
 			// The packed output must stay parseable JSONC.
 			if _, err := hujson.Parse(v.Pack()); err != nil {
 				t.Errorf("packed output is not valid: %v", err)
+			}
+			if tc.name == "trailing comma and comment" && !strings.Contains(string(v.Pack()), "// keep") {
+				t.Errorf("comment was dropped: %s", v.Pack())
 			}
 		})
 	}
