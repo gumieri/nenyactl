@@ -329,8 +329,8 @@ func TestAgentsTUI_LoadDefaultsFromCatalog(t *testing.T) {
 	if len(m.catalog.Models) == 0 {
 		t.Fatal("catalog is empty")
 	}
-	if len(a.Models) != 1 || a.Models[0] != m.catalog.Models[0].Model {
-		t.Errorf("models = %v, want [%s]", a.Models, m.catalog.Models[0].Model)
+	if len(a.Models) != 1 || a.Models[0] != m.catalog.Models[0].Provider+"/"+m.catalog.Models[0].Model {
+		t.Errorf("models = %v, want [%s/%s]", a.Models, m.catalog.Models[0].Provider, m.catalog.Models[0].Model)
 	}
 }
 

@@ -104,16 +104,19 @@ func (m tuiModel) Init() tea.Cmd {
 // handles "s", so only it advertises save; elsewhere "s" is input text.
 func (m tuiModel) helpKeyMap() tui.KeyMap {
 	switch m.screen {
-	case screenList, screenConfirm:
+	case screenList:
 		return tui.AgentsKeyMap
 	case screenEdit:
 		return tui.FormKeyMap
 	case screenPicker:
 		return tui.PickerKeyMap
+	case screenConfirm:
+		return tui.ConfirmKeyMap
 	default:
 		return tui.AgentsKeyMap
 	}
 }
+
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
@@ -334,7 +337,7 @@ func (m *tuiModel) loadDefaults() {
 	m.agents = []Agent{{
 		Name:     "default",
 		Strategy: defaultStrategy,
-		Models:   []string{first.Model},
+		Models:   []string{first.Provider + "/" + first.Model},
 	}}
 	m.cursor = 0
 	m.scrollAgents()

@@ -57,15 +57,6 @@ var ListKeyMap = KeyMap{
 	Toggle: key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
 }
 
-// ListKeyMapWithSave is ListKeyMap plus the save binding, for list screens that
-// handle "s". Screens that do not handle it must not advertise it, since "s"
-// would be typed into an input there.
-func ListKeyMapWithSave() KeyMap {
-	km := ListKeyMap
-	km.Save = key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "save"))
-	return km
-}
-
 // SectionsKeyMap is the config-editor sections screen: navigation, expand, and
 // save, but no delete/add/toggle (which belong to other screens).
 var SectionsKeyMap = KeyMap{

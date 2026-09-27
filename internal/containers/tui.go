@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -72,7 +73,6 @@ type tuiModel struct {
 	quitting      bool
 	width, height int
 	helpModel     help.Model
-	helpKM        tui.KeyMap
 }
 
 type keyField struct {
@@ -150,12 +150,27 @@ func newTUIModelWithProviders(providers []ProviderDef) tuiModel {
 		customKey:   customKey,
 		customFocus: 0,
 		helpModel:   tui.NewHelpModel(),
-		helpKM:      tui.ListKeyMap,
 	}
 }
 
 func (m tuiModel) Init() tea.Cmd {
 	return nil
+}
+
+// helpKeyMap returns the key map for the active screen so the help bar only
+// advertises handled keys.
+func (m tuiModel) helpKeyMap() tui.KeyMap {
+	km := tui.KeyMap{
+		Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+		Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+		Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "continue")),
+		Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
+		Quit:   key.NewBinding(key.WithKeys("ctrl+c", "q"), key.WithHelp("ctrl+c", "quit")),
+	}
+	if m.screen == screenSelect {
+		km.Toggle = key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle"))
+	}
+	return km
 }
 
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -360,7 +375,7 @@ func (m tuiModel) View() string {
 		content = m.renderCustom()
 	}
 
-	helpView := m.helpModel.View(m.helpKM)
+	helpView := m.helpModel.View(m.helpKeyMap())
 
 	h := lipgloss.JoinVertical(lipgloss.Top,
 		content,

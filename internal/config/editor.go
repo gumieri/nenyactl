@@ -940,10 +940,18 @@ func parseLiteralValue(raw string) hujson.Literal {
 }
 
 // agentsValue renders the agents list as the JSON value for the config's
-// top-level "agents" key, suitable for `nenya config set agents <json>`.
+// top-level "agents" key, suitable for `nenya config set agents <json>`. It
+// rejects empty and duplicate names, which would otherwise collapse silently
+// when marshaled into a map.
 func agentsValue(agents []agentEntry) (string, error) {
 	agentsMap := make(map[string]any)
 	for _, a := range agents {
+		if a.Name == "" {
+			return "", fmt.Errorf("agent name cannot be empty")
+		}
+		if _, dup := agentsMap[a.Name]; dup {
+			return "", fmt.Errorf("duplicate agent name %q", a.Name)
+		}
 		agentsMap[a.Name] = map[string]any{
 			"strategy": a.Strategy,
 			"models":   a.Models,
