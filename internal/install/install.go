@@ -67,6 +67,10 @@ var (
 	launchctlBin = "launchctl"
 )
 
+// SystemUnitDir returns the system directory the shipped service unit is
+// installed to for the current platform.
+func SystemUnitDir() string { return systemUnitDir() }
+
 // Install downloads and installs nenya using http.DefaultClient.
 func Install(ctx context.Context, cfg Config) error {
 	return InstallWithHTTP(ctx, cfg, http.DefaultClient)

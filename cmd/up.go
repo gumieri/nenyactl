@@ -2,14 +2,15 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/gumieri/nenyactl/internal/containers"
 	"github.com/gumieri/nenyactl/internal/detect"
 	"github.com/gumieri/nenyactl/internal/install"
+	"github.com/gumieri/nenyactl/internal/nenya"
 	"github.com/gumieri/nenyactl/internal/secrets"
 	"github.com/spf13/cobra"
 )
@@ -23,20 +24,22 @@ for provider keys when none are configured, start the service or containers,
 wait for /healthz, and print a copy-pasteable client snippet.
 
 Use --dir to act on a specific deployment root instead of auto-detecting.`,
+	Args: cobra.NoArgs,
 	RunE: runUp,
 }
 
 var (
-	upDir         string
-	upHealthWait  = 30 * time.Second
-	upInstallFunc = install.Install
-	// upServiceStart is a seam so up can be tested without touching the host.
-	upServiceStart = func() error { return runServiceStartWithExec(defaultExec) }
+	upDir        string
+	upWait       time.Duration
+	upInstall    = install.Install
+	upServiceRun = func() error { return runServiceStartWithExec(defaultExec) }
+	upDetect     = detect.Detect
 )
 
 func init() {
 	rootCmd.AddCommand(upCmd)
 	upCmd.Flags().StringVar(&upDir, "dir", "", "Deployment root (default: auto-detect, installing if missing)")
+	upCmd.Flags().DurationVar(&upWait, "wait", 30*time.Second, "How long to wait for /healthz")
 }
 
 func runUp(cmd *cobra.Command, args []string) error {
@@ -47,7 +50,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if err := upDeployment(ctx, res, statusHTTPClient, upHealthWait); err != nil {
+	if err := upDeployment(ctx, res, statusHTTPClient, upWait); err != nil {
 		return err
 	}
 
@@ -56,27 +59,40 @@ func runUp(cmd *cobra.Command, args []string) error {
 }
 
 // ensureDeployment resolves the deployment, installing a bare-metal service
-// when --dir was not given and nothing is detected.
+// when --dir was not given and nothing is detected. A binary that is present
+// but whose config is missing (or unreadable) is a state problem, not a reason
+// to reinstall, so those errors are surfaced rather than retried.
 func ensureDeployment(ctx context.Context, dir string) (dirResolution, error) {
 	if dir != "" {
 		return resolveDir(dir, dirAttach, false)
 	}
 
-	info, err := detect.Detect()
+	info, err := upDetect()
 	if err == nil {
 		return detectedResolution(info), nil
 	}
+	if isInstallationStateError(err) {
+		return dirResolution{}, err
+	}
 
 	fmt.Println(infoStyle.Render("›"), "No Nenya installation detected; installing the service")
-	if installErr := upInstallFunc(ctx, install.Config{}); installErr != nil {
+	if installErr := upInstall(ctx, install.Config{}); installErr != nil {
 		return dirResolution{}, fmt.Errorf("install: %w", installErr)
 	}
 
-	info, err = detect.Detect()
+	info, err = upDetect()
 	if err != nil {
 		return dirResolution{}, err
 	}
 	return detectedResolution(info), nil
+}
+
+// isInstallationStateError reports whether a detection error describes a
+// present-but-incomplete installation, which installing again cannot fix.
+func isInstallationStateError(err error) bool {
+	var cfg *detect.ConfigNotFoundError
+	var perm *detect.PermissionError
+	return errors.As(err, &cfg) || errors.As(err, &perm)
 }
 
 // upDeployment drives a resolved deployment to a healthy, reachable state. It
@@ -89,14 +105,18 @@ func upDeployment(ctx context.Context, res dirResolution, doer healthDoer, healt
 	if err := ensureClientToken(ctx, res); err != nil {
 		return err
 	}
-	ensureProviderKeys(ctx, res)
+
+	desc, descErr := res.Contract().Describe(ctx)
+	if descErr != nil {
+		fmt.Println(dimStyle.Render("  (could not read the effective config: " + descErr.Error() + ")"))
+	}
+	ensureProviderKeys(ctx, res, desc, descErr)
 
 	if err := startDeployment(res); err != nil {
 		return err
 	}
 
-	desc, _ := res.Contract().Describe(ctx)
-	port := statusPort(res, desc, len(desc.Config) > 0)
+	port := statusPort(res, desc, descErr == nil)
 	if err := waitForHealth(ctx, doer, port, healthWait); err != nil {
 		return err
 	}
@@ -106,6 +126,11 @@ func upDeployment(ctx context.Context, res dirResolution, doer healthDoer, healt
 
 func ensureConfig(res dirResolution) error {
 	if _, err := os.Stat(res.Info.ConfigFile); err == nil {
+		return nil
+	}
+	// A config.d-only root is already configured in nenya main; do not shadow
+	// it with a shim config.json.
+	if len(configAddonDirs(res)) > 0 {
 		return nil
 	}
 	fmt.Println(infoStyle.Render("›"), "Creating config at", res.Info.ConfigFile)
@@ -128,10 +153,14 @@ func ensureClientToken(ctx context.Context, res dirResolution) error {
 }
 
 // ensureProviderKeys prompts for provider keys when none are configured. The
-// prompt is best-effort: without a terminal it is skipped.
-func ensureProviderKeys(ctx context.Context, res dirResolution) {
-	desc, err := res.Contract().Describe(ctx)
-	if err == nil && len(desc.Providers.Configured) > 0 {
+// prompt is best-effort: without a terminal it is skipped, and it is skipped
+// entirely when the contract could not be read, since we cannot know what the
+// running nenya understands.
+func ensureProviderKeys(ctx context.Context, res dirResolution, desc nenya.Description, descErr error) {
+	if descErr != nil {
+		return
+	}
+	if len(desc.Providers.Configured) > 0 {
 		return
 	}
 	keys, err := containers.CollectProviderKeys()
@@ -156,20 +185,24 @@ func startDeployment(res dirResolution) error {
 		return runContainerStartWithExec(defaultExec, res.Path)
 	}
 	fmt.Println(infoStyle.Render("›"), "Starting the Nenya service")
-	return upServiceStart()
+	return upServiceRun()
 }
 
 // waitForHealth polls /healthz until it returns 200 or the wait elapses.
 func waitForHealth(ctx context.Context, doer healthDoer, port string, wait time.Duration) error {
+	if port == "" {
+		return fmt.Errorf("could not resolve the gateway port")
+	}
 	deadline := time.Now().Add(wait)
-	var last string
+	var detail string
 	for {
-		last = healthStatus(ctx, doer, port)
-		if last == "healthy" {
+		var ok bool
+		ok, detail = healthStatus(ctx, doer, port)
+		if ok {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("nenya did not become healthy on port %s within %s (last: %s)", port, wait, strings.TrimPrefix(last, "unreachable "))
+			return fmt.Errorf("nenya did not become healthy on port %s within %s (%s)", port, wait, detail)
 		}
 		select {
 		case <-ctx.Done():

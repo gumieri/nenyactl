@@ -1,6 +1,7 @@
 package contract
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -26,5 +27,20 @@ func TestRange(t *testing.T) {
 	}
 	if !strings.Contains(Check(99).Error(), Range()) {
 		t.Error("Check message should include Range()")
+	}
+}
+
+func TestUnsupportedErrorRoundTrip(t *testing.T) {
+	err := Check(99)
+	v, ok := UnsupportedContractVersion(err)
+	if !ok {
+		t.Fatalf("UnsupportedContractVersion(%v) = not found", err)
+	}
+	if v != 99 {
+		t.Errorf("version = %d, want 99", v)
+	}
+
+	if _, ok := UnsupportedContractVersion(errors.New("other")); ok {
+		t.Error("a plain error must not report an unsupported contract version")
 	}
 }

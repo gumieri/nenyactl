@@ -4,14 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/gumieri/nenyactl/internal/contract"
+	"github.com/gumieri/nenyactl/internal/detect"
+	"github.com/gumieri/nenyactl/internal/install"
 	"github.com/gumieri/nenyactl/internal/nenya"
 	"github.com/gumieri/nenyactl/internal/secrets"
 	"github.com/spf13/cobra"
@@ -25,7 +25,9 @@ config and secrets, provider keys, port availability, and service state, and
 report an actionable fix for anything that is wrong.
 
 Checks that need a running gateway or a provider key are reported as warnings,
-not failures, so doctor is safe to run before the service is started.`,
+not failures, so doctor is safe to run before the service is started. Exits
+non-zero when a check fails, so it can gate scripts.`,
+	Args: cobra.NoArgs,
 	RunE: runDoctor,
 }
 
@@ -68,171 +70,221 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	res, err := resolveLifecycleDir(doctorDir)
 	if err != nil {
-		fmt.Printf("%s %s: %v\n", checkFail, "deployment", err)
-		fmt.Println("  fix: nenyactl up")
-		return nil
+		printCheck(checkResult{Name: "deployment", Status: checkFail, Detail: err.Error(), Fix: deploymentFix(err)})
+		return fmt.Errorf("deployment: %w", err)
 	}
 
-	results := diagnose(ctx, res)
+	results := diagnose(ctx, res, statusHTTPClient)
 	var failed int
 	for _, r := range results {
-		fmt.Printf("%-10s %-16s %s\n", r.Status, r.Name, r.Detail)
-		if r.Fix != "" {
-			fmt.Printf("  fix: %s\n", r.Fix)
-		}
+		printCheck(r)
 		if r.Status == checkFail {
 			failed++
 		}
 	}
 	fmt.Println()
 	if failed > 0 {
-		fmt.Printf("%d check(s) failed\n", failed)
-	} else {
-		fmt.Println("all checks passed")
+		return fmt.Errorf("%d check(s) failed", failed)
 	}
+	fmt.Println("all checks passed")
 	return nil
 }
 
-// diagnose runs every check against the resolved deployment. It is separated
-// from the command so each check can be unit-tested.
-func diagnose(ctx context.Context, res dirResolution) []checkResult {
-	client := res.Contract()
-
-	var results []checkResult
-	results = append(results, checkConfig(client, ctx, res))
-	results = append(results, checkSecrets(res))
-	results = append(results, checkContract(client, ctx))
-	results = append(results, checkProviders(client, ctx))
-	results = append(results, checkPort(client, ctx, res))
-	results = append(results, checkService())
-	return results
+func printCheck(r checkResult) {
+	style := successStyle
+	switch r.Status {
+	case checkWarn:
+		style = warnStyle
+	case checkFail:
+		style = errorStyle
+	}
+	fmt.Printf("%s %-12s %s\n", style.Render(r.Status.String()), r.Name, r.Detail)
+	if r.Fix != "" {
+		fmt.Printf("  fix: %s\n", r.Fix)
+	}
 }
 
-func checkConfig(client *nenya.Client, ctx context.Context, res dirResolution) checkResult {
+// deploymentFix chooses the suggested action from the detection error.
+func deploymentFix(err error) string {
+	var perm *detect.PermissionError
+	if errors.As(err, &perm) {
+		return "check file permissions; re-run with sudo if the config is root-owned"
+	}
+	return "nenyactl up"
+}
+
+// diagnose runs every check against the resolved deployment. It fetches the
+// effective description once and shares it, so doctor spawns `nenya` once.
+func diagnose(ctx context.Context, res dirResolution, doer healthDoer) []checkResult {
+	client := res.Contract()
+	desc, descErr := client.Describe(ctx)
+	haveDesc := descErr == nil
+
+	return []checkResult{
+		checkConfig(res, descErr, haveDesc),
+		checkSecrets(res, desc, haveDesc),
+		checkContract(desc, descErr),
+		checkProviders(desc, descErr),
+		checkPort(ctx, doer, res, desc, haveDesc),
+		checkService(res),
+	}
+}
+
+func checkConfig(res dirResolution, descErr error, haveDesc bool) checkResult {
 	r := checkResult{Name: "config"}
 	info, err := os.Stat(res.Info.ConfigFile)
 	switch {
 	case err == nil && info.IsDir():
-		r.Status, r.Detail = checkFail, res.Info.ConfigFile+" is a directory"
-		r.Fix = "remove it and run `nenyactl config init`"
-		return r
+		return checkResult{Name: "config", Status: checkFail, Detail: res.Info.ConfigFile + " is a directory", Fix: "remove it and run `nenyactl up`"}
 	case err == nil:
 		r.Detail = res.Info.ConfigFile
+	case len(configAddonDirs(res)) > 0:
+		// Directory-mode config.d-only deployments have no config.json.
+		r.Detail = strings.Join(configAddonDirs(res), ", ")
 	default:
-		r.Status, r.Detail = checkFail, "no config at "+res.Info.ConfigFile
-		r.Fix = "run `nenyactl config init --dir " + res.Path + "`"
-		return r
+		return checkResult{Name: "config", Status: checkFail, Detail: "no config at " + res.Info.ConfigFile, Fix: "run `nenyactl up`"}
 	}
 
-	if _, err := client.Describe(ctx); err != nil {
-		r.Status, r.Detail = checkWarn, "cannot read effective config ("+err.Error()+")"
+	if !haveDesc {
+		if v, ok := contract.UnsupportedContractVersion(descErr); ok {
+			return checkResult{Name: "config", Status: checkFail, Detail: fmt.Sprintf("nenya reports unsupported contract_version %d", v), Fix: "update nenyactl or install a compatible nenya"}
+		}
+		r.Status = checkWarn
+		r.Detail += " (cannot read effective config: " + descErr.Error() + ")"
 		r.Fix = "install a nenya release that ships `describe --json`"
-		return r
 	}
 	return r
 }
 
-func checkSecrets(res dirResolution) checkResult {
+// configAddonDirs returns the config.d drop-ins present for the deployment.
+func configAddonDirs(res dirResolution) []string {
+	entries, err := os.ReadDir(res.Info.ConfigD)
+	if err != nil {
+		return nil
+	}
+	var files []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") && e.Name() != "secrets.json" {
+			files = append(files, filepath.Join(res.Info.ConfigD, e.Name()))
+		}
+	}
+	return files
+}
+
+func checkSecrets(res dirResolution, desc nenya.Description, haveDesc bool) checkResult {
 	dir := res.Info.SecretsDir()
 	if dir == "" {
 		return checkResult{Name: "secrets", Status: checkFail, Detail: "cannot resolve the secrets directory"}
 	}
-	found := secrets.ExistingTokenFile(dir)
-	if found == "" {
-		return checkResult{
-			Name:   "secrets",
-			Status: checkFail,
-			Detail: "no client token in " + dir,
-			Fix:    "run `nenyactl secret bootstrap --dir " + res.Path + "`",
+
+	// A systemd credential source is authoritative but invisible to us; defer
+	// to the contract when it reports one.
+	if haveDesc && strings.Contains(desc.Secrets.ActiveSource, "CREDENTIALS_DIRECTORY") {
+		return checkResult{Name: "secrets", Status: checkOK, Detail: "systemd credential source: " + desc.Secrets.ActiveSource}
+	}
+
+	files := secretFilesIn(dir)
+	if len(files) == 0 {
+		return checkResult{Name: "secrets", Status: checkFail, Detail: "no client token in " + dir, Fix: "run `nenyactl up`"}
+	}
+
+	var loose []string
+	for _, f := range files {
+		if info, err := os.Stat(f); err == nil && info.Mode().Perm()&0o077 != 0 {
+			loose = append(loose, fmt.Sprintf("%s (%04o)", f, info.Mode().Perm()))
 		}
 	}
-	info, err := os.Stat(found)
-	if err != nil {
-		return checkResult{Name: "secrets", Status: checkWarn, Detail: err.Error()}
+	if len(loose) > 0 {
+		return checkResult{Name: "secrets", Status: checkFail, Detail: "world/group-readable: " + strings.Join(loose, ", "), Fix: "chmod 600 " + shellQuoteAll(loose)}
 	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return checkResult{
-			Name:   "secrets",
-			Status: checkFail,
-			Detail: fmt.Sprintf("%s is mode %04o, want 0600", found, info.Mode().Perm()),
-			Fix:    "chmod 600 " + found,
-		}
-	}
-	return checkResult{Name: "secrets", Status: checkOK, Detail: found}
+	return checkResult{Name: "secrets", Status: checkOK, Detail: fmt.Sprintf("%d file(s) in %s", len(files), dir)}
 }
 
-func checkContract(client *nenya.Client, ctx context.Context) checkResult {
-	desc, err := client.Describe(ctx)
+// secretFilesIn returns every secrets file (not directory) under dir that
+// actually carries a client_token, so an unrelated config.json beside it is not
+// mistaken for a secrets file.
+func secretFilesIn(dir string) []string {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		var unsupported *contract.UnsupportedError
-		if errors.As(err, &unsupported) {
-			return checkResult{Name: "contract", Status: checkFail, Detail: unsupported.Error(), Fix: "update nenyactl or install a compatible nenya"}
+		return nil
+	}
+	var files []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
 		}
-		return checkResult{
-			Name:   "contract",
-			Status: checkWarn,
-			Detail: "not reported (describe unavailable)",
-			Fix:    "nenya releases that ship `describe --json` report contract_version",
+		if !strings.HasSuffix(e.Name(), ".json") && e.Name() != "secrets" {
+			continue
 		}
+		p := filepath.Join(dir, e.Name())
+		data, err := os.ReadFile(p)
+		if err != nil || !secrets.HasClientToken(data) {
+			continue
+		}
+		files = append(files, p)
 	}
-	if err := contract.Check(desc.ContractVersion); err != nil {
-		return checkResult{Name: "contract", Status: checkFail, Detail: err.Error(), Fix: "update nenyactl or install a compatible nenya"}
-	}
-	return checkResult{
-		Name:   "contract",
-		Status: checkOK,
-		Detail: fmt.Sprintf("v%d (nenyactl supports %s)", desc.ContractVersion, contract.Range()),
-	}
+	return files
 }
 
-func checkProviders(client *nenya.Client, ctx context.Context) checkResult {
-	desc, err := client.Describe(ctx)
-	if err != nil {
+func checkContract(desc nenya.Description, descErr error) checkResult {
+	if descErr != nil {
+		if v, ok := contract.UnsupportedContractVersion(descErr); ok {
+			return checkResult{Name: "contract", Status: checkFail, Detail: fmt.Sprintf("nenya contract_version %d is not supported (nenyactl supports %s)", v, contract.Range()), Fix: "update nenyactl or install a compatible nenya"}
+		}
+		return checkResult{Name: "contract", Status: checkWarn, Detail: "not reported (describe unavailable)", Fix: "nenya releases that ship `describe --json` report contract_version"}
+	}
+	if desc.ContractVersion == 0 {
+		return checkResult{Name: "contract", Status: checkWarn, Detail: "not reported"}
+	}
+	return checkResult{Name: "contract", Status: checkOK, Detail: fmt.Sprintf("v%d (nenyactl supports %s)", desc.ContractVersion, contract.Range())}
+}
+
+func checkProviders(desc nenya.Description, descErr error) checkResult {
+	if descErr != nil {
 		return checkResult{Name: "providers", Status: checkWarn, Detail: "not reported (describe unavailable)"}
 	}
 	if len(desc.Providers.Configured) == 0 {
-		return checkResult{
-			Name:   "providers",
-			Status: checkWarn,
-			Detail: "no provider keys configured",
-			Fix:    "nenyactl secret set --provider <name> <api-key>",
-		}
+		return checkResult{Name: "providers", Status: checkWarn, Detail: "no provider keys configured", Fix: "nenyactl secret set --provider <name> <api-key>"}
 	}
 	return checkResult{Name: "providers", Status: checkOK, Detail: strings.Join(desc.Providers.Configured, ", ")}
 }
 
-func checkPort(client *nenya.Client, ctx context.Context, res dirResolution) checkResult {
-	desc, _ := client.Describe(ctx)
-	port := statusPort(res, desc, len(desc.Config) > 0)
+func checkPort(ctx context.Context, doer healthDoer, res dirResolution, desc nenya.Description, haveDesc bool) checkResult {
+	port := statusPort(res, desc, haveDesc)
 	if port == "" {
 		return checkResult{Name: "port", Status: checkWarn, Detail: "could not resolve a port"}
 	}
-
 	addr := "localhost:" + port
-	conn, err := net.DialTimeout("tcp", addr, time.Second)
-	if err != nil {
+	ok, detail := healthStatus(ctx, doer, port)
+	switch {
+	case ok:
+		return checkResult{Name: "port", Status: checkOK, Detail: addr + " is healthy"}
+	case strings.HasPrefix(detail, "unreachable"):
 		return checkResult{Name: "port", Status: checkWarn, Detail: addr + " is free (service not running)", Fix: "nenyactl up"}
+	default:
+		return checkResult{Name: "port", Status: checkWarn, Detail: addr + ": " + detail}
 	}
-	_ = conn.Close()
-	return checkResult{Name: "port", Status: checkOK, Detail: addr + " is listening"}
 }
 
-func checkService() checkResult {
-	path := filepath.Join(defaultUnitDir(), "nenya.service")
+func checkService(res dirResolution) checkResult {
+	if res.Kind == dirContainerRoot {
+		return checkResult{Name: "service", Status: checkOK, Detail: "container deployment (no unit)"}
+	}
+	name := "nenya.service"
+	if runtime.GOOS == "darwin" {
+		name = "com.gumieri.nenya.plist"
+	}
+	path := filepath.Join(install.SystemUnitDir(), name)
 	if _, err := os.Stat(path); err == nil {
 		return checkResult{Name: "service", Status: checkOK, Detail: path}
 	}
-	return checkResult{
-		Name:   "service",
-		Status: checkWarn,
-		Detail: "no systemd unit found",
-		Fix:    "run `nenyactl up` to install and enable it",
-	}
+	return checkResult{Name: "service", Status: checkWarn, Detail: "no unit found at " + path, Fix: "nenyactl up"}
 }
 
-func defaultUnitDir() string {
-	if runtime.GOOS == "darwin" {
-		return "/Library/LaunchDaemons"
+func shellQuoteAll(paths []string) string {
+	quoted := make([]string, len(paths))
+	for i, p := range paths {
+		quoted[i] = "'" + strings.ReplaceAll(p, "'", `'\''`) + "'"
 	}
-	return "/etc/systemd/system"
+	return strings.Join(quoted, " ")
 }

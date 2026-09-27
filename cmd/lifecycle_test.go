@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gumieri/nenyactl/internal/containers"
+	"github.com/spf13/cobra"
 )
 
 // fakeDoer is a healthDoer that returns a canned response or error.
@@ -56,7 +56,7 @@ func TestBuildStatus(t *testing.T) {
 
 	for _, want := range []string{
 		"Mode:        bare-metal",
-		"Deployment:  " + dir,
+		"Config root: " + dir,
 		"Contract:    v1",
 		"Nenya:       0.15.0",
 		"Providers:   openai",
@@ -90,20 +90,23 @@ func TestBuildStatusHandlesUnreachableAndNoContract(t *testing.T) {
 	if !strings.Contains(out, "Contract:    unavailable") {
 		t.Errorf("expected an unavailable contract line:\n%s", out)
 	}
-	if !strings.Contains(out, "Health:      unreachable") {
-		t.Errorf("expected an unreachable health line:\n%s", out)
+	if !strings.Contains(out, "Port:        unknown") {
+		t.Errorf("expected an unknown port when none resolves:\n%s", out)
 	}
-	if !strings.Contains(out, "Port:        "+containers.DefaultPort) {
-		t.Errorf("expected the default port fallback:\n%s", out)
+	if !strings.Contains(out, "Health:      no port resolved") {
+		t.Errorf("expected the no-port health line:\n%s", out)
 	}
 }
 
 func TestHealthStatus(t *testing.T) {
-	if got := healthStatus(context.Background(), fakeDoer{status: http.StatusOK}, "8080"); got != "healthy" {
-		t.Errorf("healthy: got %q", got)
+	if ok, _ := healthStatus(context.Background(), fakeDoer{status: http.StatusOK}, "8080"); !ok {
+		t.Error("200 should be healthy")
 	}
-	if got := healthStatus(context.Background(), fakeDoer{status: http.StatusServiceUnavailable}, "8080"); got == "healthy" {
-		t.Errorf("unhealthy: got %q", got)
+	if ok, _ := healthStatus(context.Background(), fakeDoer{status: http.StatusServiceUnavailable}, "8080"); ok {
+		t.Error("503 should not be healthy")
+	}
+	if ok, _ := healthStatus(context.Background(), fakeDoer{}, ""); ok {
+		t.Error("no port should not be healthy")
 	}
 }
 
@@ -118,5 +121,40 @@ func TestResolveLifecycleDirExplicit(t *testing.T) {
 	}
 	if res.Kind != dirConfigRoot || res.Path != dir {
 		t.Errorf("res = %+v", res)
+	}
+}
+
+func TestRunDownBareMetal(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	savedDir := downDir
+	downDir = dir
+	t.Cleanup(func() { downDir = savedDir })
+
+	savedRun := downServiceRun
+	stopped := false
+	downServiceRun = func() error { stopped = true; return nil }
+	t.Cleanup(func() { downServiceRun = savedRun })
+
+	if err := runDown(testCmd(), nil); err != nil {
+		t.Fatalf("runDown: %v", err)
+	}
+	if !stopped {
+		t.Error("expected the service stop seam to run for a bare-metal root")
+	}
+}
+
+func TestLifecycleCommandsRejectArgs(t *testing.T) {
+	for _, c := range []*cobra.Command{upCmd, downCmd, statusCmd, doctorCmd} {
+		if c.Args == nil {
+			t.Errorf("%s: expected an Args validator", c.Name())
+			continue
+		}
+		if err := c.Args(c, []string{"stray"}); err == nil {
+			t.Errorf("%s: expected stray args to be rejected", c.Name())
+		}
 	}
 }

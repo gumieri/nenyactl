@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gumieri/nenyactl/internal/detect"
 	"github.com/gumieri/nenyactl/internal/install"
 )
 
@@ -63,17 +64,24 @@ func TestUpDeployment(t *testing.T) {
 	fakeContract(t, rr)
 
 	// Fake the service start so up does not touch the host.
-	savedStart := upServiceStart
-	upServiceStart = func() error { return nil }
-	t.Cleanup(func() { upServiceStart = savedStart })
+	savedStart := upServiceRun
+	upServiceRun = func() error { return nil }
+	t.Cleanup(func() { upServiceRun = savedStart })
 
 	if err := upDeployment(context.Background(), res, fakeDoer{status: http.StatusOK}, time.Second); err != nil {
 		t.Fatalf("upDeployment: %v", err)
 	}
 
-	// The token is created through the contract seam.
-	if len(rr.rec.calls) == 0 || rr.rec.calls[0][0] != "secret" {
-		t.Errorf("expected a secret set call, got %v", rr.rec.calls)
+	// The token is created through the contract seam with no token value, so
+	// an existing token cannot be overwritten or echoed.
+	found := false
+	for _, c := range rr.rec.calls {
+		if len(c) == 3 && c[0] == "secret" && c[1] == "set" && c[2] == "--client-token" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a bare `secret set --client-token` call, got %v", rr.rec.calls)
 	}
 }
 
@@ -88,9 +96,9 @@ func TestUpDeploymentCreatesMissingConfig(t *testing.T) {
 	rr.out = []byte(`{"contract_version":1,"providers":{"configured":["openai"]}}`)
 	fakeContract(t, rr)
 
-	savedStart := upServiceStart
-	upServiceStart = func() error { return nil }
-	t.Cleanup(func() { upServiceStart = savedStart })
+	savedStart := upServiceRun
+	upServiceRun = func() error { return nil }
+	t.Cleanup(func() { upServiceRun = savedStart })
 
 	if err := upDeployment(context.Background(), res, fakeDoer{status: http.StatusOK}, time.Second); err != nil {
 		t.Fatalf("upDeployment: %v", err)
@@ -100,25 +108,89 @@ func TestUpDeploymentCreatesMissingConfig(t *testing.T) {
 	}
 }
 
-func TestEnsureDeploymentInstallsWhenMissing(t *testing.T) {
+func TestEnsureDeploymentSkipsInstallWithDir(t *testing.T) {
 	// --dir is provided, so ensureDeployment must resolve it without installing.
 	base := t.TempDir()
 	if err := os.WriteFile(filepath.Join(base, "config.json"), []byte(`{}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	savedInstall := upInstallFunc
+	savedInstall := upInstall
 	called := false
-	upInstallFunc = func(context.Context, install.Config) error {
+	upInstall = func(context.Context, install.Config) error {
 		called = true
 		return nil
 	}
-	t.Cleanup(func() { upInstallFunc = savedInstall })
+	t.Cleanup(func() { upInstall = savedInstall })
 
 	if _, err := ensureDeployment(context.Background(), base); err != nil {
 		t.Fatalf("ensureDeployment: %v", err)
 	}
 	if called {
 		t.Error("install must not run when --dir is provided")
+	}
+}
+
+func TestEnsureDeploymentInstallsWhenMissing(t *testing.T) {
+	// No detection, so up installs and re-detects; the detect seam lets the
+	// second call report a deployment without touching the host.
+	base := t.TempDir()
+	if err := os.WriteFile(filepath.Join(base, "config.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	savedDetect := upDetect
+	detectCalls := 0
+	upDetect = func() (*detect.Info, error) {
+		detectCalls++
+		if detectCalls == 1 {
+			return nil, errors.New("nothing installed")
+		}
+		return &detect.Info{Mode: detect.ModeBareMetal, ConfigFile: filepath.Join(base, "config.json"), ConfigD: filepath.Join(base, "config.d")}, nil
+	}
+	t.Cleanup(func() { upDetect = savedDetect })
+
+	savedInstall := upInstall
+	installed := false
+	upInstall = func(context.Context, install.Config) error {
+		installed = true
+		return nil
+	}
+	t.Cleanup(func() { upInstall = savedInstall })
+
+	res, err := ensureDeployment(context.Background(), "")
+	if err != nil {
+		t.Fatalf("ensureDeployment: %v", err)
+	}
+	if !installed {
+		t.Error("expected up to install when nothing is detected")
+	}
+	if res.Kind != dirConfigRoot {
+		t.Errorf("res = %+v", res)
+	}
+}
+
+func TestEnsureDeploymentStateErrorDoesNotReinstall(t *testing.T) {
+	// A present binary with a missing config is a state problem, not a reason
+	// to reinstall.
+	savedDetect := upDetect
+	upDetect = func() (*detect.Info, error) {
+		return nil, &detect.ConfigNotFoundError{ConfigFile: "/etc/nenya/config.json", BinPath: "/usr/bin/nenya"}
+	}
+	t.Cleanup(func() { upDetect = savedDetect })
+
+	savedInstall := upInstall
+	installed := false
+	upInstall = func(context.Context, install.Config) error {
+		installed = true
+		return nil
+	}
+	t.Cleanup(func() { upInstall = savedInstall })
+
+	if _, err := ensureDeployment(context.Background(), ""); err == nil {
+		t.Fatal("expected the detection error to surface")
+	}
+	if installed {
+		t.Error("must not reinstall when the binary is present but config is missing")
 	}
 }

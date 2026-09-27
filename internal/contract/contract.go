@@ -2,7 +2,10 @@
 // supports and the fail-fast check for out-of-range installations.
 package contract
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // SupportedMin and SupportedMax bound the inclusive contract_version range this
 // build supports. Bump SupportedMax when nenyactl adopts a newer contract.
@@ -21,6 +24,16 @@ type UnsupportedError struct {
 func (e *UnsupportedError) Error() string {
 	return fmt.Sprintf("nenya contract_version %d is not supported by this nenyactl build (supports %s); update nenyactl or install a compatible nenya",
 		e.Version, Range())
+}
+
+// UnsupportedContractVersion reports the installed contract_version that an
+// unsupported-contract error carried, and whether err was such an error.
+func UnsupportedContractVersion(err error) (int, bool) {
+	var unsupported *UnsupportedError
+	if errors.As(err, &unsupported) {
+		return unsupported.Version, true
+	}
+	return 0, false
 }
 
 // Check returns an actionable error when v is outside the supported range.

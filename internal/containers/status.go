@@ -15,12 +15,22 @@ const DefaultPort = "8080"
 // compose port mapping (the source of truth written by `containers setup`). It
 // falls back to DefaultPort when no mapping is present.
 func PublishedPort(dir string) string {
-	if compose, err := os.ReadFile(filepath.Join(dir, "compose.yml")); err == nil {
-		if p, ok := parsePublishedPort(string(compose)); ok {
-			return p
-		}
+	if p, ok := HostPort(dir); ok {
+		return p
 	}
 	return DefaultPort
+}
+
+// HostPort returns the host port a deployment publishes and whether an explicit
+// mapping was found. Unlike PublishedPort it does not fall back, so callers can
+// decide what to do when a deployment (e.g. host-network) has no mapping.
+func HostPort(dir string) (string, bool) {
+	if compose, err := os.ReadFile(filepath.Join(dir, "compose.yml")); err == nil {
+		if p, ok := parsePublishedPort(string(compose)); ok {
+			return p, true
+		}
+	}
+	return "", false
 }
 
 // parsePublishedPort extracts the published (host) port from a compose file's
