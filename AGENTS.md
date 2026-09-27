@@ -118,14 +118,17 @@ These are copied verbatim in intent from `CONTRACT.md` and must not drift:
   3. `$NENYA_SECRETS_DIR/*.json`
   4. `/run/secrets/nenya/*.json`
   `client_token` is required. Secrets files are mode `0600`.
-- **Config layout**: `<config-root>/config.json` or `<config-root>/config.d/`.
-  Directory mode wins over `config.json` when `config.d/` has at least one
-  `*.json` (excluding `secrets.json`). The XOR is being revised; treat
-  `nenya describe` as the authority.
-  - **Write hazard (read before any config edit):** creating *any*
-    `config.d/*.json` makes nenya ignore an existing `config.json` entirely.
-    Do not write a drop-in when `config.json` is present. (This is the live
-    defect behind NCTL "Fix config.d precedence inverted".)
+- **Config layout**: `<config-root>/config.json` and/or `<config-root>/config.d/`.
+  In nenya `main`, `config.json` is the base and `config.d/*.json` (excluding
+  `secrets.json`) layer over it in ascending filename order (later file wins);
+  with no `config.d/` only `config.json` is read. Treat `nenya describe` as the
+  authority on the effective config.
+  - **Write hazard (read before any config edit):** on **released binaries
+    ≤0.15** the old XOR still applies — creating *any* `config.d/*.json` makes
+    nenya ignore an existing `config.json` entirely. Detect the nenya version and
+    never write a drop-in beside a `config.json` on those releases (the NCTL
+    "config.d precedence" defect). On `main` the layering rule above applies and
+    a drop-in augments the base.
   - The directory merge currently drops some `governance.*` sub-sections
     (`injection`, `spotlight`, `exfil_guard`, `canary`, `param_compat`). A
     successful write is therefore **not** proof the setting applies — re-read
