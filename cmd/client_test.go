@@ -158,8 +158,26 @@ func TestWriteClientConfigMerges(t *testing.T) {
 	if root["theme"] != "dark" {
 		t.Error("unrelated key not preserved")
 	}
-	if _, ok := root["providers"].(map[string]any)["nenya"]; !ok {
-		t.Error("nenya provider not added")
+	providers, ok := root["providers"].(map[string]any)
+	if !ok {
+		t.Fatal("providers object missing")
+	}
+	nenya, ok := providers["nenya"].(map[string]any)
+	if !ok {
+		t.Fatal("nenya provider not added")
+	}
+	if nenya["package"] != "@opencode/ai/providers/openai-compatible" {
+		t.Errorf("package = %v", nenya["package"])
+	}
+	settings, ok := nenya["settings"].(map[string]any)
+	if !ok {
+		t.Fatal("nenya provider has no settings")
+	}
+	if settings["apiKey"] != "nk-test" {
+		t.Errorf("apiKey = %v", settings["apiKey"])
+	}
+	if _, ok := root["provider"]; ok {
+		t.Error("V1 provider key should not be written")
 	}
 	info, err := os.Stat(cfgPath)
 	if err != nil {

@@ -88,6 +88,16 @@ func TestRenderOpenCodeUsesV2Shape(t *testing.T) {
 	if settings["baseURL"] != "http://localhost:9090/v1" {
 		t.Errorf("baseURL = %v", settings["baseURL"])
 	}
+	if settings["apiKey"] != "nk-test123" {
+		t.Errorf("apiKey = %v", settings["apiKey"])
+	}
+	models, ok := nenya["models"].(map[string]any)
+	if !ok {
+		t.Fatal("V2 provider must carry a `models` object")
+	}
+	if _, ok := models["build"]; !ok {
+		t.Error("models must include the build model")
+	}
 }
 
 func TestMergeOpenCodePreservesUnrelatedKeys(t *testing.T) {
@@ -109,20 +119,61 @@ func TestMergeOpenCodePreservesUnrelatedKeys(t *testing.T) {
 	if root["theme"] != "dark" {
 		t.Error("unrelated top-level key dropped")
 	}
-	provider := root["providers"].(map[string]any)
+	provider, ok := root["providers"].(map[string]any)
+	if !ok {
+		t.Fatal("merged output has no providers object")
+	}
 	if _, ok := provider["other"]; !ok {
 		t.Error("unrelated provider dropped")
 	}
-	nenya := provider["nenya"].(map[string]any)
+	nenya, ok := provider["nenya"].(map[string]any)
+	if !ok {
+		t.Fatal("merged output has no nenya provider")
+	}
 	if nenya["package"] != "@opencode/ai/providers/openai-compatible" {
 		t.Errorf("package = %v", nenya["package"])
 	}
-	settings := nenya["settings"].(map[string]any)
+	settings, ok := nenya["settings"].(map[string]any)
+	if !ok {
+		t.Fatal("nenya provider has no settings")
+	}
 	if settings["apiKey"] != "nk-test123" {
 		t.Errorf("apiKey = %v", settings["apiKey"])
 	}
 	if settings["baseURL"] != "http://localhost:9090/v1" {
 		t.Errorf("baseURL = %v", settings["baseURL"])
+	}
+}
+
+func TestMergeOpenCodeMigratesLegacyV1(t *testing.T) {
+	existing := []byte(`{
+  "provider": {
+    "nenya": {"npm": "@ai-sdk/openai-compatible"},
+    "other": {"npm": "x"}
+  }
+}`)
+	merged, err := MergeOpenCodeProvider(existing, testEndpoint())
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(merged, &root); err != nil {
+		t.Fatalf("merged output invalid JSON: %v", err)
+	}
+	providers := root["providers"].(map[string]any)
+	if _, ok := providers["nenya"]; !ok {
+		t.Error("V2 nenya provider not added")
+	}
+	legacy, ok := root["provider"].(map[string]any)
+	if !ok {
+		t.Fatal("legacy provider object was dropped entirely")
+	}
+	if _, ok := legacy["nenya"]; ok {
+		t.Error("legacy V1 provider.nenya was not removed")
+	}
+	if _, ok := legacy["other"]; !ok {
+		t.Error("unrelated legacy provider was dropped")
 	}
 }
 
@@ -132,11 +183,10 @@ func TestMergeOpenCodePreservesComments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("merge with comments: %v", err)
 	}
-	if !strings.Contains(string(merged), "user comment") {
-		t.Errorf("comment was not preserved:\n%s", merged)
-	}
-	if !strings.Contains(string(merged), "nenya") {
-		t.Errorf("provider not added:\n%s", merged)
+	for _, want := range []string{"user comment", `"providers"`, `"nenya"`, "@opencode/ai/providers/openai-compatible"} {
+		if !strings.Contains(string(merged), want) {
+			t.Errorf("merged output missing %q:\n%s", want, merged)
+		}
 	}
 }
 

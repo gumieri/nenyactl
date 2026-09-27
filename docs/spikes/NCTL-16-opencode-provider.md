@@ -39,11 +39,13 @@ matrix against OpenCode, and a supply-chain surface for no functional gain.
 
 - nenyactl generates the V2 provider block (`nenyactl client add opencode`),
   merges it into `~/.config/opencode/opencode.json` preserving unrelated keys
-  and comments, and prints it at the end of `up`/`install --connect`.
+  and comments, and prints the client connection info (with a pointer to
+  `client add --show-token`) at the end of `up`/`install --connect`.
 - No npm scope, no plugin package. Revisit only if OpenCode adds a
   provider-registration hook that a plugin could use.
 - The generated shape is pinned by `TestRenderOpenCodeUsesV2Shape` so a V1
-  regression fails loudly.
+  regression fails loudly, and a legacy V1 `provider.nenya` is removed on
+  merge (`TestMergeOpenCodeMigratesLegacyV1`).
 
 ## Verification
 

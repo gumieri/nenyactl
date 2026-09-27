@@ -92,7 +92,7 @@ func Render(name Name, ep Endpoint) (Snippet, error) {
 // and `settings` carrying package-specific options (baseURL/apiKey). The old V1
 // `provider`/`npm`/`options` shape is not valid in V2.
 func openCode(base, token string) Snippet {
-	provider := map[string]any{
+	doc := map[string]any{
 		"providers": map[string]any{
 			"nenya": map[string]any{
 				"name":    "Nenya Gateway",
@@ -107,7 +107,12 @@ func openCode(base, token string) Snippet {
 			},
 		},
 	}
-	body, _ := json.MarshalIndent(provider, "", "  ")
+	body, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		// The document is built from plain maps of strings; a marshal failure
+		// here is not reachable.
+		body = []byte("{}")
+	}
 	return Snippet{
 		Name:        OpenCode,
 		Description: "Add the providers block to ~/.config/opencode/opencode.json",
@@ -159,7 +164,7 @@ func MergeOpenCodeProvider(existing []byte, ep Endpoint) ([]byte, error) {
 
 	var block map[string]any
 	if err := json.Unmarshal([]byte(snippet.Body), &block); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse opencode snippet: %w", err)
 	}
 	providers, ok := block["providers"].(map[string]any)
 	if !ok {
@@ -170,12 +175,20 @@ func MergeOpenCodeProvider(existing []byte, ep Endpoint) ([]byte, error) {
 		return nil, fmt.Errorf("internal error: opencode snippet is not a provider object")
 	}
 
-	provider, ok := jsonc.EnsureObject(v, "providers")
+	providersObj, ok := jsonc.EnsureObject(v, "providers")
 	if !ok {
 		return nil, fmt.Errorf("existing opencode.json has a non-object \"providers\" value")
 	}
-	if err := jsonc.SetValue(provider, "nenya", built); err != nil {
+	if err := jsonc.SetValue(providersObj, "nenya", built); err != nil {
 		return nil, err
+	}
+
+	// Migrate away from the V1 shape: drop a legacy top-level provider.nenya so
+	// an upgrading user does not end up with both blocks.
+	if legacyProvider, ok := jsonc.GetNestedField(v, []string{"provider"}); ok {
+		if legacyObj, ok := jsonc.GetObject(legacyProvider); ok {
+			jsonc.DeleteMember(legacyObj, "nenya")
+		}
 	}
 
 	return jsonc.Render(v)

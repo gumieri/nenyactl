@@ -97,6 +97,18 @@ func SetValue(obj *hujson.Object, key string, value any) error {
 	return nil
 }
 
+// DeleteMember removes the member named key from obj, reporting whether it
+// existed.
+func DeleteMember(obj *hujson.Object, key string) bool {
+	for i := range obj.Members {
+		if memberName(&obj.Members[i]) == key {
+			obj.Members = append(obj.Members[:i], obj.Members[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
 func GetField(v *hujson.Value, key string) (*hujson.Value, bool) {
 	obj, ok := v.Value.(*hujson.Object)
 	if !ok {
