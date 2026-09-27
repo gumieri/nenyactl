@@ -29,12 +29,14 @@ Use --dir to act on a specific deployment root instead of auto-detecting.`,
 }
 
 var (
-	upDir           string
-	upWait          time.Duration
-	upInstall       = install.Install
-	upServiceRun    = func() error { return runServiceStartWithExec(defaultExec) }
-	upServiceReload = func() error { return runServiceReloadWithExec(defaultExec) }
-	upDetect        = detect.Detect
+	upDir              string
+	upWait             time.Duration
+	upInstall          = install.Install
+	upServiceRun       = func() error { return runServiceStartWithExec(defaultExec) }
+	upServiceReload    = func() error { return runServiceReloadWithExec(defaultExec) }
+	upContainerRestart = func(dir string) error { return runContainerRestartWithExec(defaultExec, dir) }
+	upCollectKeys      = containers.CollectProviderKeys
+	upDetect           = detect.Detect
 )
 
 func init() {
@@ -126,12 +128,20 @@ func upDeployment(ctx context.Context, res dirResolution, doer healthDoer, healt
 	if err := startDeployment(res); err != nil {
 		return err
 	}
-	// Keys saved above are not loaded by an already-running service; nudge it
-	// to reload so the just-configured providers take effect. A container
-	// deployment reloads via the fresh `compose up`, not the host service.
-	if wroteKeys && res.Kind == dirConfigRoot {
-		if err := upServiceReload(); err != nil {
-			fmt.Println(dimStyle.Render("  (could not reload the service: " + err.Error() + ")"))
+	// Keys saved above are not loaded by an already-running process. A
+	// bare-metal service reloads (SIGHUP); a running container only re-reads
+	// the bind-mounted secrets on restart, since compose up does not recreate
+	// an unchanged container.
+	if wroteKeys {
+		switch res.Kind {
+		case dirContainerRoot:
+			if err := upContainerRestart(res.Path); err != nil {
+				fmt.Println(dimStyle.Render("  (could not restart the containers: " + err.Error() + ")"))
+			}
+		default:
+			if err := upServiceReload(); err != nil {
+				fmt.Println(dimStyle.Render("  (could not reload the service: " + err.Error() + ")"))
+			}
 		}
 	}
 
@@ -182,7 +192,7 @@ func ensureProviderKeys(ctx context.Context, res dirResolution, desc nenya.Descr
 	if len(desc.Providers.Configured) > 0 {
 		return false
 	}
-	keys, err := containers.CollectProviderKeys()
+	keys, err := upCollectKeys()
 	if err != nil || len(keys) == 0 {
 		return false
 	}

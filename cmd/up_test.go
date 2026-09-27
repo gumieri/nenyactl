@@ -102,7 +102,7 @@ func TestUpDeploymentCreatesMissingConfig(t *testing.T) {
 	}
 
 	rr := newRecordingRunner()
-	rr.out = []byte(`{"contract_version":1,"providers":{"configured":["openai"]}}`)
+	// No output: Describe fails, so no provider keys are written.
 	fakeContract(t, rr)
 
 	savedStart := upServiceRun
@@ -119,10 +119,42 @@ func TestUpDeploymentCreatesMissingConfig(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(base, "config.json")); err != nil {
 		t.Errorf("expected config.json to be created: %v", err)
 	}
-	// describe failed here (the recording runner has no describe output), so
-	// no provider keys were written and no reload should happen.
 	if reloaded {
 		t.Error("service must not reload after a failed describe")
+	}
+}
+
+func TestUpDeploymentReloadsAfterSavingKeys(t *testing.T) {
+	base := t.TempDir()
+	if err := os.WriteFile(filepath.Join(base, "config.json"), []byte(`{"server":{"listen_addr":":18081"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := resolveDir(base, dirAttach, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := newRecordingRunner()
+	rr.out = []byte(`{"contract_version":1,"config":{"server":{"listen_addr":":18081"}},"providers":{"configured":[]}}`)
+	fakeContract(t, rr)
+
+	savedKeys := upCollectKeys
+	upCollectKeys = func() (map[string]string, error) { return map[string]string{"openai": "sk-x"}, nil }
+	t.Cleanup(func() { upCollectKeys = savedKeys })
+
+	savedStart := upServiceRun
+	upServiceRun = func() error { return nil }
+	t.Cleanup(func() { upServiceRun = savedStart })
+	reloaded := false
+	savedReload := upServiceReload
+	upServiceReload = func() error { reloaded = true; return nil }
+	t.Cleanup(func() { upServiceReload = savedReload })
+
+	if err := upDeployment(context.Background(), res, fakeDoer{status: http.StatusOK}, time.Second); err != nil {
+		t.Fatalf("upDeployment: %v", err)
+	}
+	if !reloaded {
+		t.Error("expected the service to reload after saving provider keys")
 	}
 }
 

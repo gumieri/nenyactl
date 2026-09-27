@@ -236,6 +236,24 @@ func runContainerStopWithExec(ex execer, dir string) error {
 	return c.Run()
 }
 
+// runContainerRestartWithExec restarts the compose services so a running
+// container re-reads the bind-mounted secrets after a key change.
+func runContainerRestartWithExec(ex execer, dir string) error {
+	res, err := resolveDir(dir, dirAttach, true)
+	if err != nil {
+		return err
+	}
+	dir = res.Path
+
+	runtime, composeArgs, _ := ctpaths.ComposeCmd()
+	composeArgs = append(composeArgs, "restart")
+
+	fmt.Printf("%s Running: %s compose %v\n", infoStyle.Render("›"), runtime, composeArgs)
+
+	c := ex.Command(string(runtime), composeArgs...).Dir(dir).Stdout(os.Stdout).Stderr(os.Stderr)
+	return c.Run()
+}
+
 var containerStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show container status and health",
