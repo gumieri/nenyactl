@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 func GenerateClientToken() string {
@@ -71,11 +72,52 @@ func fileHasClientToken(path string) bool {
 // HasClientToken reports whether data is a secrets document with a non-empty
 // client_token. Unparseable data is reported as "no token".
 func HasClientToken(data []byte) bool {
+	return ClientTokenFromJSON(data) != ""
+}
+
+// ClientTokenFromJSON returns the client_token in a secrets document, or ""
+// when the document has none or is unparseable. It is the single parser for the
+// secrets JSON shape, shared by the read-only compatibility checks in this
+// package and by the container token reader.
+func ClientTokenFromJSON(data []byte) string {
 	var s struct {
 		ClientToken string `json:"client_token"`
 	}
 	if err := json.Unmarshal(data, &s); err != nil {
-		return false
+		return ""
 	}
-	return s.ClientToken != ""
+	return s.ClientToken
+}
+
+// ClientTokenInDir resolves the effective client_token in a secrets directory,
+// merging *.json files in ascending name order (last non-empty wins) with a
+// fallback to a single "<dir>/secrets.json". This mirrors nenya's secrets merge
+// order; it is a documented read-only compatibility check for the window before
+// a contract read surface exists (NENYA-103), not the source of truth.
+func ClientTokenInDir(dir string) string {
+	token := ""
+	if entries, err := os.ReadDir(dir); err == nil {
+		var files []string
+		for _, entry := range entries {
+			if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
+				files = append(files, filepath.Join(dir, entry.Name()))
+			}
+		}
+		sort.Strings(files)
+		for _, file := range files {
+			data, err := os.ReadFile(file)
+			if err != nil {
+				continue
+			}
+			if t := ClientTokenFromJSON(data); t != "" {
+				token = t
+			}
+		}
+	}
+	if token == "" {
+		if data, err := os.ReadFile(filepath.Join(dir, "secrets.json")); err == nil {
+			token = ClientTokenFromJSON(data)
+		}
+	}
+	return token
 }

@@ -133,6 +133,43 @@ func TestHasClientToken(t *testing.T) {
 	}
 }
 
+func TestClientTokenFromJSON(t *testing.T) {
+	if got := ClientTokenFromJSON([]byte(`{"client_token":"nk-x"}`)); got != "nk-x" {
+		t.Errorf("ClientTokenFromJSON = %q, want nk-x", got)
+	}
+	for _, bad := range []string{`{}`, `{"client_token":""}`, `not json`} {
+		if got := ClientTokenFromJSON([]byte(bad)); got != "" {
+			t.Errorf("ClientTokenFromJSON(%q) = %q, want empty", bad, got)
+		}
+	}
+}
+
+func TestClientTokenInDir(t *testing.T) {
+	t.Run("last non-empty token wins in name order", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "01-client.json", `{"client_token":"nk-first"}`)
+		writeFile(t, dir, "02-providers.json", `{"provider_keys":{}}`)
+		writeFile(t, dir, "03-override.json", `{"client_token":"nk-last"}`)
+		if got := ClientTokenInDir(dir); got != "nk-last" {
+			t.Errorf("ClientTokenInDir = %q, want nk-last", got)
+		}
+	})
+
+	t.Run("falls back to secrets.json", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "secrets.json", `{"client_token":"nk-single"}`)
+		if got := ClientTokenInDir(dir); got != "nk-single" {
+			t.Errorf("ClientTokenInDir = %q, want nk-single", got)
+		}
+	})
+
+	t.Run("missing dir returns empty", func(t *testing.T) {
+		if got := ClientTokenInDir(filepath.Join(t.TempDir(), "nope")); got != "" {
+			t.Errorf("ClientTokenInDir = %q, want empty", got)
+		}
+	})
+}
+
 func writeFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {

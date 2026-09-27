@@ -1,11 +1,11 @@
 package containers
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
+
+	"github.com/gumieri/nenyactl/internal/secrets"
 )
 
 // DefaultPort is the container-internal port and the fallback published port.
@@ -72,40 +72,13 @@ func leadingSpaces(s string) int {
 // It merges secrets/*.json in name order (last non-empty wins), matching
 // nenya's secrets merge (CONTRACT.md §6.2), and falls back to a single
 // secrets.json when present or when the directory merge yields nothing.
+//
+// This is a documented read-only compatibility check for the window before a
+// contract read surface exists (NENYA-103); the merge itself lives in
+// internal/secrets so there is one implementation.
 func ClientToken(dir string) string {
-	token := ""
-	if entries, err := os.ReadDir(filepath.Join(dir, "secrets")); err == nil {
-		var files []string
-		for _, entry := range entries {
-			if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
-				files = append(files, filepath.Join(dir, "secrets", entry.Name()))
-			}
-		}
-		sort.Strings(files)
-		for _, file := range files {
-			data, err := os.ReadFile(file)
-			if err != nil {
-				continue
-			}
-			if t := tokenFromJSON(data); t != "" {
-				token = t
-			}
-		}
+	if token := secrets.ClientTokenInDir(filepath.Join(dir, "secrets")); token != "" {
+		return token
 	}
-	if token == "" {
-		if data, err := os.ReadFile(filepath.Join(dir, "secrets.json")); err == nil {
-			token = tokenFromJSON(data)
-		}
-	}
-	return token
-}
-
-func tokenFromJSON(data []byte) string {
-	var s struct {
-		ClientToken string `json:"client_token"`
-	}
-	if err := json.Unmarshal(data, &s); err != nil {
-		return ""
-	}
-	return s.ClientToken
+	return secrets.ClientTokenInDir(dir)
 }
