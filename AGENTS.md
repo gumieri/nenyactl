@@ -129,9 +129,10 @@ These are copied verbatim in intent from `CONTRACT.md` and must not drift:
     never write a drop-in beside a `config.json` on those releases (the NCTL
     "config.d precedence" defect). On `main` the layering rule above applies and
     a drop-in augments the base.
-  - The directory merge currently drops some `governance.*` sub-sections
-    (`injection`, `spotlight`, `exfil_guard`, `canary`, `param_compat`). A
-    successful write is therefore **not** proof the setting applies — re-read
+  - The directory merge is structural in nenya `main` (every field, including
+    `governance.*` sub-sections such as `injection`, `canary`, `exfil_guard`,
+    `param_compat`); released ≤0.15 dropped several of them. Regardless, a
+    successful write is **not** proof the setting applies — re-read
     `nenya describe` (or the file the layout actually uses) and report which
     file was written.
   - Prefer `nenya config set` / `nenya secret set` (target) once they ship;
