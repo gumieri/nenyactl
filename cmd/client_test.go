@@ -158,10 +158,9 @@ func TestWriteClientConfigMerges(t *testing.T) {
 	if root["theme"] != "dark" {
 		t.Error("unrelated key not preserved")
 	}
-	if _, ok := root["provider"].(map[string]any)["nenya"]; !ok {
+	if _, ok := root["providers"].(map[string]any)["nenya"]; !ok {
 		t.Error("nenya provider not added")
 	}
-
 	info, err := os.Stat(cfgPath)
 	if err != nil {
 		t.Fatal(err)

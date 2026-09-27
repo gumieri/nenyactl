@@ -51,11 +51,50 @@ func TestRenderTrailingSlashNormalized(t *testing.T) {
 	}
 }
 
+func TestRenderOpenCodeUsesV2Shape(t *testing.T) {
+	s, err := Render(OpenCode, testEndpoint())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal([]byte(s.Body), &root); err != nil {
+		t.Fatalf("opencode snippet is not JSON: %v", err)
+	}
+	if _, ok := root["provider"]; ok {
+		t.Error("snippet must not emit the V1 `provider` key")
+	}
+	providers, ok := root["providers"].(map[string]any)
+	if !ok {
+		t.Fatal("snippet must emit the V2 `providers` map")
+	}
+	nenya, ok := providers["nenya"].(map[string]any)
+	if !ok {
+		t.Fatal("snippet must define the nenya provider")
+	}
+	if nenya["package"] != "@opencode/ai/providers/openai-compatible" {
+		t.Errorf("package = %v", nenya["package"])
+	}
+	if _, ok := nenya["npm"]; ok {
+		t.Error("V2 provider must not use the V1 `npm` field")
+	}
+	if _, ok := nenya["options"]; ok {
+		t.Error("V2 provider must not use the V1 `options` field")
+	}
+	settings, ok := nenya["settings"].(map[string]any)
+	if !ok {
+		t.Fatal("V2 provider must carry a `settings` object")
+	}
+	if settings["baseURL"] != "http://localhost:9090/v1" {
+		t.Errorf("baseURL = %v", settings["baseURL"])
+	}
+}
+
 func TestMergeOpenCodePreservesUnrelatedKeys(t *testing.T) {
 	existing := []byte(`{
   "theme": "dark",
-  "provider": {
-    "other": {"npm": "x"}
+  "providers": {
+    "other": {"package": "x"}
   }
 }`)
 	merged, err := MergeOpenCodeProvider(existing, testEndpoint())
@@ -70,17 +109,20 @@ func TestMergeOpenCodePreservesUnrelatedKeys(t *testing.T) {
 	if root["theme"] != "dark" {
 		t.Error("unrelated top-level key dropped")
 	}
-	provider := root["provider"].(map[string]any)
+	provider := root["providers"].(map[string]any)
 	if _, ok := provider["other"]; !ok {
 		t.Error("unrelated provider dropped")
 	}
 	nenya := provider["nenya"].(map[string]any)
-	opts := nenya["options"].(map[string]any)
-	if opts["apiKey"] != "nk-test123" {
-		t.Errorf("apiKey = %v", opts["apiKey"])
+	if nenya["package"] != "@opencode/ai/providers/openai-compatible" {
+		t.Errorf("package = %v", nenya["package"])
 	}
-	if opts["baseURL"] != "http://localhost:9090/v1" {
-		t.Errorf("baseURL = %v", opts["baseURL"])
+	settings := nenya["settings"].(map[string]any)
+	if settings["apiKey"] != "nk-test123" {
+		t.Errorf("apiKey = %v", settings["apiKey"])
+	}
+	if settings["baseURL"] != "http://localhost:9090/v1" {
+		t.Errorf("baseURL = %v", settings["baseURL"])
 	}
 }
 

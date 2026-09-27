@@ -87,24 +87,30 @@ func Render(name Name, ep Endpoint) (Snippet, error) {
 	}
 }
 
+// openCode renders an OpenCode V2 provider entry. OpenCode V2 uses the
+// `providers` map keyed by provider ID, with `package` selecting the runtime
+// and `settings` carrying package-specific options (baseURL/apiKey). The old V1
+// `provider`/`npm`/`options` shape is not valid in V2.
 func openCode(base, token string) Snippet {
 	provider := map[string]any{
-		"nenya": map[string]any{
-			"npm":  "@ai-sdk/openai-compatible",
-			"name": "Nenya Gateway",
-			"options": map[string]any{
-				"baseURL": base + "/v1",
-				"apiKey":  token,
-			},
-			"models": map[string]any{
-				"build": map[string]any{"name": "build"},
+		"providers": map[string]any{
+			"nenya": map[string]any{
+				"name":    "Nenya Gateway",
+				"package": "@opencode/ai/providers/openai-compatible",
+				"settings": map[string]any{
+					"baseURL": base + "/v1",
+					"apiKey":  token,
+				},
+				"models": map[string]any{
+					"build": map[string]any{"name": "build"},
+				},
 			},
 		},
 	}
 	body, _ := json.MarshalIndent(provider, "", "  ")
 	return Snippet{
 		Name:        OpenCode,
-		Description: "Add the provider block to ~/.config/opencode/opencode.json",
+		Description: "Add the providers block to ~/.config/opencode/opencode.json",
 		Body:        string(body),
 		ConfigPath:  "~/.config/opencode/opencode.json",
 		Mergeable:   true,
@@ -135,9 +141,10 @@ func aider(base, token string) Snippet {
 	}
 }
 
-// MergeOpenCodeProvider updates an existing OpenCode config's provider.nenya
-// object, preserving every other key and any JSONC comments. It returns the
-// full merged document. Existing config that is not a JSON object is rejected.
+// MergeOpenCodeProvider updates an existing OpenCode config's
+// providers.nenya object, preserving every other key and any JSONC comments. It
+// returns the full merged document. Existing config that is not a JSON object
+// is rejected.
 func MergeOpenCodeProvider(existing []byte, ep Endpoint) ([]byte, error) {
 	base := strings.TrimRight(ep.BaseURL, "/")
 	snippet := openCode(base, ep.Token)
@@ -154,14 +161,18 @@ func MergeOpenCodeProvider(existing []byte, ep Endpoint) ([]byte, error) {
 	if err := json.Unmarshal([]byte(snippet.Body), &block); err != nil {
 		return nil, err
 	}
-	built, ok := block["nenya"].(map[string]any)
+	providers, ok := block["providers"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("internal error: opencode snippet has no providers object")
+	}
+	built, ok := providers["nenya"].(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("internal error: opencode snippet is not a provider object")
 	}
 
-	provider, ok := jsonc.EnsureObject(v, "provider")
+	provider, ok := jsonc.EnsureObject(v, "providers")
 	if !ok {
-		return nil, fmt.Errorf("existing opencode.json has a non-object \"provider\" value")
+		return nil, fmt.Errorf("existing opencode.json has a non-object \"providers\" value")
 	}
 	if err := jsonc.SetValue(provider, "nenya", built); err != nil {
 		return nil, err
