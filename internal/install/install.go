@@ -207,7 +207,7 @@ func InstallWithHTTPAndRunner(ctx context.Context, cfg Config, hc HTTPDoer, runn
 			bootstrapReady = false
 			fmt.Fprintf(os.Stderr, "Warning: could not create config: %v\n", err)
 		}
-		if _, err := bootstrapSecrets(p); err != nil {
+		if _, err := bootstrapSecrets(ctx, runner, dest, p); err != nil {
 			bootstrapReady = false
 			fmt.Fprintf(os.Stderr, "Warning: could not create secrets: %v\n", err)
 		}

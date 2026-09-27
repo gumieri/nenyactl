@@ -91,10 +91,59 @@ func TestBootstrapConfig(t *testing.T) {
 }
 
 func TestBootstrapSecrets(t *testing.T) {
-	t.Run("creates 0600 token without printing it", func(t *testing.T) {
+	t.Run("routes through nenya secret set when supported", func(t *testing.T) {
 		dir := t.TempDir()
 		p := installPaths{secretsFile: filepath.Join(dir, "secrets.json")}
-		created, err := bootstrapSecrets(p)
+		var calls []string
+		r := scriptRunner{
+			outputs: map[string]string{
+				"/bin/nenya secret get -h":             "usage: nenya secret get …",
+				"/bin/nenya secret set --client-token": filepath.Join(dir, "secrets.json") + "\n",
+			},
+			calls: &calls,
+		}
+		created, err := bootstrapSecrets(context.Background(), r, "/bin/nenya", p)
+		if err != nil || !created {
+			t.Fatalf("created=%v err=%v", created, err)
+		}
+		joined := strings.Join(calls, "\n")
+		if !strings.Contains(joined, "nenya secret set --client-token") {
+			t.Errorf("the write must go through the single writer: %s", joined)
+		}
+		// The shim must not also have written a file behind nenya's back.
+		if _, err := os.Stat(p.secretsFile); !os.IsNotExist(err) {
+			t.Errorf("nenyactl wrote %s itself: %v", p.secretsFile, err)
+		}
+	})
+
+	t.Run("fails closed with the writer instead of hand-writing", func(t *testing.T) {
+		dir := t.TempDir()
+		p := installPaths{secretsFile: filepath.Join(dir, "secrets.json")}
+		var calls []string
+		r := scriptRunner{
+			outputs: map[string]string{
+				// Supported binary; the write fails (e.g. an active systemd
+				// credential source). The shim must NOT kick in here.
+				"/bin/nenya secret get -h": "usage: nenya secret get …",
+			},
+			calls: &calls,
+		}
+		created, err := bootstrapSecrets(context.Background(), r, "/bin/nenya", p)
+		if err == nil || created {
+			t.Fatalf("created=%v err=%v, want a surfaced failure", created, err)
+		}
+		if _, err := os.Stat(p.secretsFile); !os.IsNotExist(err) {
+			t.Errorf("shim wrote a shadowed secrets file: %v", err)
+		}
+	})
+
+	t.Run("falls back to a hand-written 0600 token without the writer", func(t *testing.T) {
+		dir := t.TempDir()
+		p := installPaths{secretsFile: filepath.Join(dir, "secrets.json")}
+		// scriptRunner errors on every command: `secret get -h` is absent.
+		var calls []string
+		r := scriptRunner{calls: &calls}
+		created, err := bootstrapSecrets(context.Background(), r, "/bin/nenya", p)
 		if err != nil || !created {
 			t.Fatalf("created=%v err=%v", created, err)
 		}
@@ -121,7 +170,8 @@ func TestBootstrapSecrets(t *testing.T) {
 		dir := t.TempDir()
 		p := installPaths{secretsFile: filepath.Join(dir, "secrets.json")}
 		_ = os.WriteFile(p.secretsFile, []byte(`{"client_token":"nk-existing"}`), 0o600)
-		created, err := bootstrapSecrets(p)
+		r := scriptRunner{}
+		created, err := bootstrapSecrets(context.Background(), r, "/bin/nenya", p)
 		if err != nil || created {
 			t.Fatalf("created=%v err=%v", created, err)
 		}
@@ -186,9 +236,14 @@ func TestInstallSystemBootstraps(t *testing.T) {
 		dest + " example-config": `{"server":{"listen_addr":":8080"}}`,
 	}}
 	// Cosign verification is exercised separately; this test focuses on the
-	// bootstrap + service side effects, which need systemctl faked too.
+	// bootstrap + service side effects, which need systemctl faked too. The
+	// installed binary pretends to lack `secret get`, so the documented
+	// hand-write shim creates the token file this test asserts on.
 	var calls []string
-	runner := multiRunner{scriptRunner{outputs: r.outputs, calls: &calls}}
+	runner := multiRunner{
+		fallback: scriptRunner{outputs: r.outputs, calls: &calls},
+		failKeys: []string{dest + " secret get -h"},
+	}
 
 	cfg := Config{
 		Version:           "v0.0.0-test",
@@ -240,10 +295,13 @@ func TestInstallSecretsDirFromPaths(t *testing.T) {
 	pathsJSON := `{"mode":"directory","config_dir":"` + configDir + `","config_file":"` + configDir + `/config.json","secrets_dir":"/run/secrets/nenya","platform":"linux"}`
 
 	var calls []string
-	runner := multiRunner{scriptRunner{outputs: map[string]string{
-		dest + " example-config": `{"server":{"listen_addr":":8080"}}`,
-		dest + " paths --json":   pathsJSON,
-	}, calls: &calls}}
+	runner := multiRunner{
+		fallback: scriptRunner{outputs: map[string]string{
+			dest + " example-config": `{"server":{"listen_addr":":8080"}}`,
+			dest + " paths --json":   pathsJSON,
+		}, calls: &calls},
+		failKeys: []string{dest + " secret get -h"},
+	}
 
 	cfg := Config{
 		Version:           "v0.0.0-test",
@@ -263,6 +321,57 @@ func TestInstallSecretsDirFromPaths(t *testing.T) {
 	}
 	if _, err := os.Stat("/run/secrets/nenya/secrets.json"); err == nil {
 		t.Error("install wrote a token into the wildcard secrets_dir")
+	}
+}
+
+func TestInstallRoutesSecretsThroughSecretSet(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd install path is linux-only")
+	}
+
+	archive := containTarGz(t, map[string]string{
+		"nenya":                "fake-binary-content",
+		"deploy/nenya.service": "[Unit]\nDescription=nenya",
+		"deploy/nenya.socket":  "[Socket]\nListenStream=8080",
+	})
+	server := releaseServer(t, archive, "v0.0.0-test")
+	defer server.Close()
+	pointAtServer(t, server)
+
+	tmp := t.TempDir()
+	binDir := filepath.Join(tmp, "bin")
+	configDir := filepath.Join(tmp, "cfg")
+	unitDir := filepath.Join(tmp, "systemd")
+	dest := filepath.Join(binDir, "nenya")
+
+	var calls []string
+	// The installed binary supports the secret surface (secret get -h exits 0),
+	// so the write must be delegated to `secret set` — nenyactl never writes
+	// the secrets file itself on this path.
+	runner := multiRunner{fallback: scriptRunner{outputs: map[string]string{
+		dest + " example-config": `{"server":{"listen_addr":":8080"}}`,
+		dest + " secret get -h":  "usage: nenya secret get …",
+	}, calls: &calls}}
+
+	cfg := Config{
+		Version:           "v0.0.0-test",
+		SkipVerify:        true,
+		binDirOverride:    binDir,
+		configDirOverride: configDir,
+		unitDirOverride:   unitDir,
+	}
+	if err := InstallWithHTTPAndRunner(context.Background(), cfg, server.Client(), runner); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	found := false
+	for _, c := range calls {
+		if c == dest+" secret set --client-token" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("fresh-install token was not routed through nenya secret set; calls:\n%s", strings.Join(calls, "\n"))
 	}
 }
 
@@ -312,20 +421,29 @@ func TestQueryNenyaPathsTimesOut(t *testing.T) {
 }
 
 // multiRunner dispatches by command name to a per-name runner, recording calls.
+// Unknown commands succeed with "ok" (cosign, systemctl, …), except keys in
+// failKeys, which fail — used to simulate a binary without a given subcommand.
 type multiRunner struct {
 	fallback scriptRunner
+	failKeys []string
 }
 
 func (m multiRunner) Output(ctx context.Context, name string, args ...string) ([]byte, error) {
-	if out, ok := m.fallback.outputs[strings.Join(append([]string{name}, args...), " ")]; ok {
+	key := strings.Join(append([]string{name}, args...), " ")
+	for _, k := range m.failKeys {
+		if k == key {
+			return nil, fmt.Errorf("%s: not supported", key)
+		}
+	}
+	if out, ok := m.fallback.outputs[key]; ok {
 		if m.fallback.calls != nil {
-			*m.fallback.calls = append(*m.fallback.calls, strings.Join(append([]string{name}, args...), " "))
+			*m.fallback.calls = append(*m.fallback.calls, key)
 		}
 		return []byte(out), nil
 	}
 	// systemctl/launchctl and cosign succeed; other probe commands succeed too.
 	if m.fallback.calls != nil {
-		*m.fallback.calls = append(*m.fallback.calls, strings.Join(append([]string{name}, args...), " "))
+		*m.fallback.calls = append(*m.fallback.calls, key)
 	}
 	return []byte("ok"), nil
 }
@@ -357,10 +475,13 @@ func TestInstallUserWritesNoSystemUnits(t *testing.T) {
 
 	var calls []string
 	dest := filepath.Join(tmp, ".local", "bin", "nenya")
-	runner := multiRunner{scriptRunner{
-		outputs: map[string]string{dest + " example-config": `{"server":{"listen_addr":":8080"}}`},
-		calls:   &calls,
-	}}
+	runner := multiRunner{
+		fallback: scriptRunner{
+			outputs: map[string]string{dest + " example-config": `{"server":{"listen_addr":":8080"}}`},
+			calls:   &calls,
+		},
+		failKeys: []string{dest + " secret get -h"},
+	}
 
 	cfg := Config{Version: "v0.0.0-test", UserInstall: true, SkipVerify: true}
 	if err := InstallWithHTTPAndRunner(context.Background(), cfg, server.Client(), runner); err != nil {
@@ -403,7 +524,7 @@ func TestCheckInstalledContract(t *testing.T) {
 	t.Run("fails closed on an unsupported contract", func(t *testing.T) {
 		var calls []string
 		dest := "/bin/nenya"
-		runner := multiRunner{scriptRunner{
+		runner := multiRunner{fallback: scriptRunner{
 			outputs: map[string]string{dest + " describe --json": `{"contract_version": 99}`},
 			calls:   &calls,
 		}}
@@ -416,7 +537,7 @@ func TestCheckInstalledContract(t *testing.T) {
 	t.Run("accepts a supported contract", func(t *testing.T) {
 		var calls []string
 		dest := "/bin/nenya"
-		runner := multiRunner{scriptRunner{
+		runner := multiRunner{fallback: scriptRunner{
 			outputs: map[string]string{dest + " describe --json": `{"contract_version": 1}`},
 			calls:   &calls,
 		}}
@@ -428,7 +549,7 @@ func TestCheckInstalledContract(t *testing.T) {
 	t.Run("feature-detects through version --json", func(t *testing.T) {
 		var calls []string
 		dest := "/bin/nenya"
-		runner := multiRunner{scriptRunner{
+		runner := multiRunner{fallback: scriptRunner{
 			outputs: map[string]string{dest + " version --json": `{"version":"0.15.0","contract_version":1}`},
 			calls:   &calls,
 		}}
@@ -440,7 +561,7 @@ func TestCheckInstalledContract(t *testing.T) {
 	t.Run("no version surface is accepted", func(t *testing.T) {
 		var calls []string
 		dest := "/bin/nenya"
-		runner := multiRunner{scriptRunner{outputs: map[string]string{}, calls: &calls}}
+		runner := multiRunner{fallback: scriptRunner{outputs: map[string]string{}, calls: &calls}}
 		if err := checkInstalledContract(context.Background(), runner, dest); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

@@ -2,9 +2,12 @@ package install
 
 // This package deliberately embeds no copy of Nenya's example config:
 // CONTRACT.md §4.4 reserves `nenya example-config` for that, and the boundary
-// rule forbids re-encoding it. The one shim is BootstrapConfigContent below.
-// internal/containers/setup.go keeps a second minimal shim (it cannot assume a
-// nenya binary); collapse both once example-config ships.
+// rule forbids re-encoding it. Two documented shims remain for released
+// binaries without the writer commands: BootstrapConfigContent (example-config)
+// and the hand-written secrets.json in bootstrapSecrets (secret set). Both are
+// feature-detected fallbacks, retired once those binaries are gone.
+// internal/containers/setup.go keeps the config shim too (it cannot assume a
+// nenya binary at all).
 
 import (
 	"context"
@@ -42,8 +45,9 @@ type installPaths struct {
 }
 
 // resolveInstallPaths determines where config, secrets, and units live. It
-// prefers `nenya paths --json` (contract target) for the config root/file and
-// falls back to platform defaults until that command ships.
+// prefers `nenya paths --json` (CONTRACT.md §4.2, stable) for the config
+// root/file and falls back to platform defaults when the command is absent
+// (released binaries without it).
 func resolveInstallPaths(ctx context.Context, cfg Config, runner CommandRunner, execPath string) (installPaths, error) {
 	if cfg.UserInstall {
 		dir := cfg.configDirOverride
@@ -159,10 +163,18 @@ func bootstrapConfig(ctx context.Context, runner CommandRunner, execPath string,
 	return writeNewFile(p.configFile, content, 0o644)
 }
 
-// bootstrapSecrets creates secrets.json with a fresh client token when absent.
+// bootstrapSecrets creates the deployment's client token when absent, through
+// nenya's single writer (`nenya secret set --client-token`, CONTRACT.md §4.7):
+// nenya resolves the target file itself (the config root since NENYA-102, the
+// path the shipped unit wires via LoadCredential), writes atomically with mode
+// 0600, generates a compliant token, and fails closed when a systemd credential
+// source would shadow the write — a refusal is never worked around by a
+// hand-write. Released binaries without the writer (feature-detected via
+// `secret get -h`) fall back to writing the config-root secrets.json by hand:
+// the documented shim, retired once `secret set` is everywhere.
 // Existing secrets are never overwritten, so an install cannot rotate a token.
 // The token is deliberately not printed.
-func bootstrapSecrets(p installPaths) (bool, error) {
+func bootstrapSecrets(ctx context.Context, runner CommandRunner, execPath string, p installPaths) (bool, error) {
 	if _, err := os.Stat(p.secretsFile); err == nil {
 		return false, nil
 	} else if !os.IsNotExist(err) {
@@ -173,6 +185,15 @@ func bootstrapSecrets(p installPaths) (bool, error) {
 		fmt.Fprintf(os.Stderr, "Warning: a client token already exists in %s; not creating %s.\n", found, p.secretsFile)
 		fmt.Fprintln(os.Stderr, "Delete it (or set NENYA_SECRETS_DIR) before creating a new one from the install.")
 		return false, nil
+	}
+
+	if secretWriterSupported(ctx, runner, execPath) {
+		if _, err := nenya.New(nenyaRunner{runner: runner, execPath: execPath}).
+			SecretWriterFor(p.secretsDir).
+			SetClientToken(ctx, ""); err != nil {
+			return false, fmt.Errorf("secret set: %w", err)
+		}
+		return true, nil
 	}
 
 	if err := os.MkdirAll(filepath.Dir(p.secretsFile), 0o700); err != nil {
@@ -191,6 +212,30 @@ func bootstrapSecrets(p installPaths) (bool, error) {
 	}
 	content = append(content, '\n')
 	return writeNewFile(p.secretsFile, content, 0o600)
+}
+
+// nenyaRunner adapts the install CommandRunner to the nenya contract client's
+// Runner: the binary path becomes the command name, matching how every other
+// nenya invocation in this package runs (and how tests script them).
+type nenyaRunner struct {
+	runner   CommandRunner
+	execPath string
+}
+
+// Output runs `<execPath> <args…>` through the install runner.
+func (n nenyaRunner) Output(ctx context.Context, args ...string) ([]byte, error) {
+	return n.runner.Output(ctx, n.execPath, args...)
+}
+
+// secretWriterSupported reports whether the installed binary implements the
+// `secret` surface (CONTRACT.md §4.7/§4.8): `secret get -h` prints usage and
+// exits 0 on a supported binary. Anything else — an unknown command, or a
+// pre-contract binary that treats unknown subcommands as a server start and
+// blocks until the bounded probe fires — means "unsupported", so callers fall
+// back rather than assume.
+func secretWriterSupported(ctx context.Context, runner CommandRunner, execPath string) bool {
+	_, err := probeOutput(ctx, runner, execPath, "secret", "get", "-h")
+	return err == nil
 }
 
 // writeNewFile writes content to path only if it does not already exist, using
