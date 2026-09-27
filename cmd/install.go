@@ -58,5 +58,12 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println(successStyle.Render("✓"), "nenya installed successfully")
+
+	// Surface the resolved endpoint/token so the next action is copy-paste.
+	if !installSkipSvc {
+		if res, err := resolveDir("", false); err == nil {
+			printClientSnippets(res)
+		}
+	}
 	return nil
 }
