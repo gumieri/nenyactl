@@ -54,6 +54,87 @@ func TestReadFile(t *testing.T) {
 	})
 }
 
+func TestDeleteMember(t *testing.T) {
+	cases := []struct {
+		name   string
+		doc    string
+		key    string
+		gone   bool
+		remain []string
+	}{
+		{
+			name:   "middle member",
+			doc:    `{"a":1,"b":2,"c":3}`,
+			key:    "b",
+			gone:   true,
+			remain: []string{"a", "c"},
+		},
+		{
+			name:   "last member",
+			doc:    `{"a":1,"b":2}`,
+			key:    "b",
+			gone:   true,
+			remain: []string{"a"},
+		},
+		{
+			name:   "only member",
+			doc:    `{"a":1}`,
+			key:    "a",
+			gone:   true,
+			remain: nil,
+		},
+		{
+			name:   "missing member",
+			doc:    `{"a":1}`,
+			key:    "z",
+			gone:   false,
+			remain: []string{"a"},
+		},
+		{
+			name:   "trailing comma and comment",
+			doc:    "{\n  // keep\n  \"a\": 1,\n  \"b\": 2,\n}\n",
+			key:    "b",
+			gone:   true,
+			remain: []string{"a"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := hujson.Parse([]byte(tc.doc))
+			if err != nil {
+				t.Fatal(err)
+			}
+			obj, ok := GetObject(&v)
+			if !ok {
+				t.Fatal("expected an object")
+			}
+			if got := DeleteMember(obj, tc.key); got != tc.gone {
+				t.Errorf("DeleteMember(%q) = %v, want %v", tc.key, got, tc.gone)
+			}
+			if got := TopLevelKeys(&v); !equalStrings(got, tc.remain) {
+				t.Errorf("remaining keys = %v, want %v", got, tc.remain)
+			}
+			// The packed output must stay parseable JSONC.
+			if _, err := hujson.Parse(v.Pack()); err != nil {
+				t.Errorf("packed output is not valid: %v", err)
+			}
+		})
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestGetField(t *testing.T) {
 	v, err := hujson.Parse([]byte(exampleJSONC))
 	if err != nil {

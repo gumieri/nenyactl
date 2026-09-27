@@ -107,9 +107,12 @@ func TestMergeOpenCodePreservesUnrelatedKeys(t *testing.T) {
     "other": {"package": "x"}
   }
 }`)
-	merged, err := MergeOpenCodeProvider(existing, testEndpoint())
+	merged, removed, err := MergeOpenCodeProvider(existing, testEndpoint())
 	if err != nil {
 		t.Fatalf("merge: %v", err)
+	}
+	if removed {
+		t.Error("no legacy provider should have been removed")
 	}
 
 	var root map[string]any
@@ -152,16 +155,22 @@ func TestMergeOpenCodeMigratesLegacyV1(t *testing.T) {
     "other": {"npm": "x"}
   }
 }`)
-	merged, err := MergeOpenCodeProvider(existing, testEndpoint())
+	merged, removed, err := MergeOpenCodeProvider(existing, testEndpoint())
 	if err != nil {
 		t.Fatalf("merge: %v", err)
+	}
+	if !removed {
+		t.Error("expected the legacy provider.nenya to be reported as removed")
 	}
 
 	var root map[string]any
 	if err := json.Unmarshal(merged, &root); err != nil {
 		t.Fatalf("merged output invalid JSON: %v", err)
 	}
-	providers := root["providers"].(map[string]any)
+	providers, ok := root["providers"].(map[string]any)
+	if !ok {
+		t.Fatal("merged output has no providers object")
+	}
 	if _, ok := providers["nenya"]; !ok {
 		t.Error("V2 nenya provider not added")
 	}
@@ -179,7 +188,7 @@ func TestMergeOpenCodeMigratesLegacyV1(t *testing.T) {
 
 func TestMergeOpenCodePreservesComments(t *testing.T) {
 	existing := []byte("{\n  // user comment\n  \"theme\": \"dark\"\n}\n")
-	merged, err := MergeOpenCodeProvider(existing, testEndpoint())
+	merged, _, err := MergeOpenCodeProvider(existing, testEndpoint())
 	if err != nil {
 		t.Fatalf("merge with comments: %v", err)
 	}
@@ -191,18 +200,18 @@ func TestMergeOpenCodePreservesComments(t *testing.T) {
 }
 
 func TestMergeOpenCodeRejectsNonObject(t *testing.T) {
-	if _, err := MergeOpenCodeProvider([]byte(`[1,2,3]`), testEndpoint()); err == nil {
+	if _, _, err := MergeOpenCodeProvider([]byte(`[1,2,3]`), testEndpoint()); err == nil {
 		t.Fatal("expected error for array config")
 	}
 }
 
 func TestMergeOpenCodeIdempotent(t *testing.T) {
 	ep := testEndpoint()
-	first, err := MergeOpenCodeProvider(nil, ep)
+	first, _, err := MergeOpenCodeProvider(nil, ep)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := MergeOpenCodeProvider(first, ep)
+	second, _, err := MergeOpenCodeProvider(first, ep)
 	if err != nil {
 		t.Fatal(err)
 	}

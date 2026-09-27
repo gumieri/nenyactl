@@ -200,9 +200,10 @@ func writeClientConfig(snippet clients.Snippet, ep clients.Endpoint) error {
 	}
 
 	var merged []byte
+	var removedLegacy bool
 	switch snippet.Name {
 	case clients.OpenCode:
-		merged, err = clients.MergeOpenCodeProvider(existing, ep)
+		merged, removedLegacy, err = clients.MergeOpenCodeProvider(existing, ep)
 	default:
 		return fmt.Errorf("no merge writer for client %s", snippet.Name)
 	}
@@ -220,6 +221,9 @@ func writeClientConfig(snippet clients.Snippet, ep clients.Endpoint) error {
 		return fmt.Errorf("chmod %s: %w", path, err)
 	}
 	fmt.Println(successStyle.Render("✓"), "Updated", path, "(mode 0600)")
+	if removedLegacy {
+		fmt.Println(dimStyle.Render("  removed the legacy V1 provider.nenya block"))
+	}
 	return nil
 }
 

@@ -75,7 +75,7 @@ func Render(name Name, ep Endpoint) (Snippet, error) {
 	base := strings.TrimRight(ep.BaseURL, "/")
 	switch name {
 	case OpenCode:
-		return openCode(base, ep.Token), nil
+		return openCode(base, ep.Token)
 	case Cursor:
 		return cursor(base, ep.Token), nil
 	case Claude:
@@ -91,7 +91,7 @@ func Render(name Name, ep Endpoint) (Snippet, error) {
 // `providers` map keyed by provider ID, with `package` selecting the runtime
 // and `settings` carrying package-specific options (baseURL/apiKey). The old V1
 // `provider`/`npm`/`options` shape is not valid in V2.
-func openCode(base, token string) Snippet {
+func openCode(base, token string) (Snippet, error) {
 	doc := map[string]any{
 		"providers": map[string]any{
 			"nenya": map[string]any{
@@ -109,9 +109,7 @@ func openCode(base, token string) Snippet {
 	}
 	body, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
-		// The document is built from plain maps of strings; a marshal failure
-		// here is not reachable.
-		body = []byte("{}")
+		return Snippet{}, fmt.Errorf("render opencode snippet: %w", err)
 	}
 	return Snippet{
 		Name:        OpenCode,
@@ -119,7 +117,7 @@ func openCode(base, token string) Snippet {
 		Body:        string(body),
 		ConfigPath:  "~/.config/opencode/opencode.json",
 		Mergeable:   true,
-	}
+	}, nil
 }
 
 func cursor(base, token string) Snippet {
@@ -148,48 +146,56 @@ func aider(base, token string) Snippet {
 
 // MergeOpenCodeProvider updates an existing OpenCode config's
 // providers.nenya object, preserving every other key and any JSONC comments. It
-// returns the full merged document. Existing config that is not a JSON object
-// is rejected.
-func MergeOpenCodeProvider(existing []byte, ep Endpoint) ([]byte, error) {
+// returns the full merged document and whether a legacy V1 provider.nenya was
+// removed. Existing config that is not a JSON object is rejected.
+func MergeOpenCodeProvider(existing []byte, ep Endpoint) ([]byte, bool, error) {
 	base := strings.TrimRight(ep.BaseURL, "/")
-	snippet := openCode(base, ep.Token)
+	snippet, err := openCode(base, ep.Token)
+	if err != nil {
+		return nil, false, err
+	}
 
 	v, err := jsonc.ParseDoc(existing)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if _, ok := jsonc.GetObject(v); !ok {
-		return nil, fmt.Errorf("existing opencode.json is not a JSON object")
+		return nil, false, fmt.Errorf("existing opencode.json is not a JSON object")
 	}
 
 	var block map[string]any
 	if err := json.Unmarshal([]byte(snippet.Body), &block); err != nil {
-		return nil, fmt.Errorf("parse opencode snippet: %w", err)
+		return nil, false, fmt.Errorf("parse opencode snippet: %w", err)
 	}
 	providers, ok := block["providers"].(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("internal error: opencode snippet has no providers object")
+		return nil, false, fmt.Errorf("internal error: opencode snippet has no providers object")
 	}
 	built, ok := providers["nenya"].(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("internal error: opencode snippet is not a provider object")
+		return nil, false, fmt.Errorf("internal error: opencode snippet is not a provider object")
 	}
 
 	providersObj, ok := jsonc.EnsureObject(v, "providers")
 	if !ok {
-		return nil, fmt.Errorf("existing opencode.json has a non-object \"providers\" value")
+		return nil, false, fmt.Errorf("existing opencode.json has a non-object \"providers\" value")
 	}
 	if err := jsonc.SetValue(providersObj, "nenya", built); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	// Migrate away from the V1 shape: drop a legacy top-level provider.nenya so
 	// an upgrading user does not end up with both blocks.
+	removedLegacy := false
 	if legacyProvider, ok := jsonc.GetNestedField(v, []string{"provider"}); ok {
 		if legacyObj, ok := jsonc.GetObject(legacyProvider); ok {
-			jsonc.DeleteMember(legacyObj, "nenya")
+			removedLegacy = jsonc.DeleteMember(legacyObj, "nenya")
 		}
 	}
 
-	return jsonc.Render(v)
+	merged, err := jsonc.Render(v)
+	if err != nil {
+		return nil, false, err
+	}
+	return merged, removedLegacy, nil
 }
