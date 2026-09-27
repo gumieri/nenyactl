@@ -90,36 +90,46 @@ func init() {
 }
 
 func runSecretBootstrap(cmd *cobra.Command, args []string) error {
-	res, err := resolveDir(bootstrapDir, false)
+	res, err := resolveDir(bootstrapDir, dirCreate, false)
 	if err != nil {
 		return err
 	}
-	secretsPath := res.Info.SecretsFile()
+	secretsDir := res.SecretsDir()
+	secretsPath := filepath.Join(secretsDir, "01-client.json")
 
-	if _, err := os.Stat(secretsPath); err == nil {
-		return fmt.Errorf("%s already exists, refusing to overwrite", secretsPath)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(secretsPath), 0o755); err != nil {
-		return fmt.Errorf("create directory %s: %w", filepath.Dir(secretsPath), err)
-	}
-
-	token := secrets.GenerateClientToken()
-	content := fmt.Sprintf(`{
-  "client_token": "%s",
-  "provider_keys": {
-    "gemini": "AIza...",
-    "deepseek": "sk-..."
-  }
+	newFile, err := writeNewFile0600(secretsPath, []byte(fmt.Sprintf(`{
+  "client_token": "%s"
 }
-`, token)
-
-	if err := os.WriteFile(secretsPath, []byte(content), 0o600); err != nil {
-		return fmt.Errorf("write %s: %w", secretsPath, err)
+`, secrets.GenerateClientToken())))
+	if err != nil {
+		return err
+	}
+	if !newFile {
+		return fmt.Errorf("%s already exists, refusing to overwrite", secretsPath)
 	}
 
 	fmt.Println(successStyle.Render("✓"), "Wrote", secretsPath)
 	fmt.Println(dimStyle.Render("  → Set your provider API keys before starting nenya"))
 
 	return nil
+}
+
+// writeNewFile0600 writes content with O_EXCL so an existing file is never
+// clobbered, and reports whether a new file was created.
+func writeNewFile0600(path string, content []byte) (bool, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return false, fmt.Errorf("create directory %s: %w", filepath.Dir(path), err)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("create %s: %w", path, err)
+	}
+	if _, err := f.Write(content); err != nil {
+		_ = f.Close()
+		return false, fmt.Errorf("write %s: %w", path, err)
+	}
+	return true, f.Close()
 }

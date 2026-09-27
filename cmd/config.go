@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,16 +44,15 @@ func init() {
 }
 
 func runConfigInit(cmd *cobra.Command, args []string) error {
-	res, err := resolveDir(configDir, false)
+	res, err := resolveDir(configDir, dirCreate, false)
 	if err != nil {
 		return err
 	}
-	dir := res.Path
 
-	if err := bootstrapConfig(dir); err != nil {
+	if err := bootstrapConfig(res.ConfigDir()); err != nil {
 		return fmt.Errorf("config init: %w", err)
 	}
-	fmt.Println(successStyle.Render("✓"), "Config directory created:", dir)
+	fmt.Println(successStyle.Render("✓"), "Config directory created:", res.ConfigDir())
 	return nil
 }
 
@@ -61,22 +61,17 @@ func bootstrapConfig(dir string) error {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
 
-	files := map[string]string{
-		"config.json": install.ExampleConfig,
+	path := filepath.Join(dir, "config.json")
+	if _, err := os.Stat(path); err == nil {
+		fmt.Println(dimStyle.Render("  ∃"), "Skipping existing", path)
+		return nil
 	}
 
-	for name, content := range files {
-		path := filepath.Join(dir, name)
-		if _, err := os.Stat(path); err == nil {
-			fmt.Println(dimStyle.Render("  ∃"), "Skipping existing", path)
-			continue
-		}
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			return fmt.Errorf("write %s: %w", path, err)
-		}
-		fmt.Println(successStyle.Render("✓"), "Wrote", path)
+	content := install.BootstrapConfigContent(context.Background(), install.NewExecRunner(), "nenya")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
 	}
-
+	fmt.Println(successStyle.Render("✓"), "Wrote", path)
 	return nil
 }
 
@@ -101,7 +96,7 @@ func runConfigEdit(cmd *cobra.Command, args []string) error {
 	var configD string
 
 	if configEditDir != "" {
-		res, err := resolveDir(configEditDir, false)
+		res, err := resolveDir(configEditDir, dirAttach, false)
 		if err != nil {
 			return err
 		}

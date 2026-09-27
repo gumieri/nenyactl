@@ -84,6 +84,20 @@ func TestMergeOpenCodePreservesUnrelatedKeys(t *testing.T) {
 	}
 }
 
+func TestMergeOpenCodePreservesComments(t *testing.T) {
+	existing := []byte("{\n  // user comment\n  \"theme\": \"dark\"\n}\n")
+	merged, err := MergeOpenCodeProvider(existing, testEndpoint())
+	if err != nil {
+		t.Fatalf("merge with comments: %v", err)
+	}
+	if !strings.Contains(string(merged), "user comment") {
+		t.Errorf("comment was not preserved:\n%s", merged)
+	}
+	if !strings.Contains(string(merged), "nenya") {
+		t.Errorf("provider not added:\n%s", merged)
+	}
+}
+
 func TestMergeOpenCodeRejectsNonObject(t *testing.T) {
 	if _, err := MergeOpenCodeProvider([]byte(`[1,2,3]`), testEndpoint()); err == nil {
 		t.Fatal("expected error for array config")

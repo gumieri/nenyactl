@@ -1,6 +1,7 @@
 package jsonc
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -18,6 +19,29 @@ func ReadFile(path string) (*hujson.Value, error) {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	return &v, nil
+}
+
+// ParseDoc parses JSONC text into a hujson value. Empty input yields an empty
+// object so callers can seed a new document.
+func ParseDoc(data []byte) (*hujson.Value, error) {
+	if len(strings.TrimSpace(string(data))) == 0 {
+		v, _ := hujson.Parse([]byte("{}"))
+		return &v, nil
+	}
+	v, err := hujson.Parse(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse JSONC: %w", err)
+	}
+	return &v, nil
+}
+
+// Render serializes a hujson value back to JSONC bytes.
+func Render(v *hujson.Value) ([]byte, error) {
+	out, err := hujson.Format(v.Pack())
+	if err != nil {
+		return nil, fmt.Errorf("format JSONC: %w", err)
+	}
+	return out, nil
 }
 
 func WriteFile(path string, v *hujson.Value, perm os.FileMode) error {
@@ -44,6 +68,55 @@ func AsObject(v *hujson.Value) (*hujson.Object, bool) {
 func GetObject(v *hujson.Value) (*hujson.Object, bool) {
 	obj, ok := v.Value.(*hujson.Object)
 	return obj, ok
+}
+
+// EnsureObject returns the object member named key, creating it as an empty
+// object when absent or when the existing value is not an object. It returns
+// nil only when v itself is not an object.
+func EnsureObject(v *hujson.Value, key string) *hujson.Object {
+	obj, ok := v.Value.(*hujson.Object)
+	if !ok {
+		return nil
+	}
+	for i := range obj.Members {
+		if memberName(&obj.Members[i]) == key {
+			if _, isObj := obj.Members[i].Value.Value.(*hujson.Object); isObj {
+				return obj.Members[i].Value.Value.(*hujson.Object)
+			}
+			obj.Members[i].Value.Value = &hujson.Object{}
+			return obj.Members[i].Value.Value.(*hujson.Object)
+		}
+	}
+	child := &hujson.Object{}
+	obj.Members = append(obj.Members, hujson.ObjectMember{
+		Name:  hujson.Value{Value: hujson.Literal(fmt.Sprintf("%q", key))},
+		Value: hujson.Value{Value: child},
+	})
+	return child
+}
+
+// SetValue sets a member on an object from a Go value, replacing any existing
+// member with the same name.
+func SetValue(obj *hujson.Object, key string, value any) error {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	parsed, err := hujson.Parse(encoded)
+	if err != nil {
+		return err
+	}
+	for i := range obj.Members {
+		if memberName(&obj.Members[i]) == key {
+			obj.Members[i].Value = parsed
+			return nil
+		}
+	}
+	obj.Members = append(obj.Members, hujson.ObjectMember{
+		Name:  hujson.Value{Value: hujson.Literal(fmt.Sprintf("%q", key))},
+		Value: parsed,
+	})
+	return nil
 }
 
 func GetField(v *hujson.Value, key string) (*hujson.Value, bool) {

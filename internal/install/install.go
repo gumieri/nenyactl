@@ -85,6 +85,9 @@ func InstallWithHTTPAndRunner(ctx context.Context, cfg Config, hc HTTPDoer, runn
 	}
 
 	tag := normalizeTag(cfg.Version)
+	if tag == "" && cfg.Version != "" {
+		return fmt.Errorf("invalid version %q: expected a release tag like v0.15.0", cfg.Version)
+	}
 	if tag == "" {
 		var err error
 		tag, err = FetchLatestVersionWithHTTP(ctx, hc)
@@ -336,12 +339,37 @@ func NewExecRunner() CommandRunner { return execRunner{} }
 
 // NormalizeTag ensures a release tag keeps its conventional leading `v`, since
 // download URLs are /releases/download/vX.Y.Z/ while artifact names omit it.
+// It returns "" when the tag contains characters that could escape a path.
 func NormalizeTag(v string) string {
 	v = strings.TrimSpace(v)
-	if v == "" || strings.HasPrefix(v, "v") {
+	if v == "" {
+		return ""
+	}
+	for _, r := range v {
+		if !isTagRune(r) {
+			return ""
+		}
+	}
+	if strings.HasPrefix(v, "v") {
 		return v
 	}
 	return "v" + v
+}
+
+// isTagRune reports whether r may appear in a release tag.
+func isTagRune(r rune) bool {
+	switch {
+	case r >= '0' && r <= '9':
+		return true
+	case r >= 'a' && r <= 'z':
+		return true
+	case r >= 'A' && r <= 'Z':
+		return true
+	case r == '.' || r == '-' || r == '_' || r == 'v':
+		return true
+	default:
+		return false
+	}
 }
 
 // archiveFilename builds the release archive name for a tag. The tag keeps its

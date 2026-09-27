@@ -41,11 +41,11 @@ func runAgents(cmd *cobra.Command, args []string) error {
 
 	var info *detect.Info
 	if agentsDir != "" {
-		var err error
-		info, err = detect.DetectFromDirAuto(agentsDir)
+		res, err := resolveDir(agentsDir, dirAttach, false)
 		if err != nil {
-			return fmt.Errorf("--dir: %w", err)
+			return err
 		}
+		info = res.Info
 		if agentsMode != "" {
 			mode, modeErr := parseAgentsMode(agentsMode)
 			if modeErr != nil {

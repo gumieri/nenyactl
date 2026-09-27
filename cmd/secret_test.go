@@ -56,20 +56,45 @@ func TestRunSecretBootstrap(t *testing.T) {
 		if err != nil {
 			t.Fatalf("runSecretBootstrap() error = %v", err)
 		}
-		if _, err := os.Stat(filepath.Join(tmp, "secrets.json")); os.IsNotExist(err) {
-			t.Error("secrets.json not created")
+		path := filepath.Join(tmp, "01-client.json")
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("client secrets not created: %v", err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Errorf("mode = %o, want 0600", info.Mode().Perm())
 		}
 	})
 
 	t.Run("refuses to overwrite existing", func(t *testing.T) {
 		tmp := t.TempDir()
-		if err := os.WriteFile(filepath.Join(tmp, "secrets.json"), []byte("{}"), 0o644); err != nil {
-			t.Fatalf("write secrets.json: %v", err)
+		if err := os.WriteFile(filepath.Join(tmp, "01-client.json"), []byte("{}"), 0o600); err != nil {
+			t.Fatalf("write secrets: %v", err)
 		}
 		bootstrapDir = tmp
 		err := runSecretBootstrap(&cobra.Command{}, nil)
 		if err == nil {
 			t.Fatal("expected error for existing file")
+		}
+	})
+
+	t.Run("container dir writes into secrets/", func(t *testing.T) {
+		tmp := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(tmp, "config"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(tmp, "config", "config.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		bootstrapDir = tmp
+		if err := runSecretBootstrap(&cobra.Command{}, nil); err != nil {
+			t.Fatalf("runSecretBootstrap() error = %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(tmp, "secrets", "01-client.json")); err != nil {
+			t.Errorf("expected secrets/01-client.json: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(tmp, "secrets.json")); err == nil {
+			t.Error("must not write root-level secrets.json for a container layout")
 		}
 	})
 }

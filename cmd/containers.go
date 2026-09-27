@@ -111,7 +111,7 @@ func runContainerSetup(cmd *cobra.Command, args []string) error {
 }
 
 func runContainerSetupWithExec(ex execer, dir, listenAddr string, startAfter bool) error {
-	res, err := resolveDir(dir, true)
+	res, err := resolveDir(dir, dirCreate, true)
 	if err != nil {
 		return err
 	}
@@ -189,7 +189,7 @@ func runContainerStart(cmd *cobra.Command, args []string) error {
 }
 
 func runContainerStartWithExec(ex execer, dir string) error {
-	res, err := resolveDir(dir, true)
+	res, err := resolveDir(dir, dirAttach, true)
 	if err != nil {
 		return err
 	}
@@ -221,7 +221,7 @@ func runContainerStop(cmd *cobra.Command, _ []string) error {
 }
 
 func runContainerStopWithExec(ex execer, dir string) error {
-	res, err := resolveDir(dir, true)
+	res, err := resolveDir(dir, dirAttach, true)
 	if err != nil {
 		return err
 	}
@@ -253,7 +253,7 @@ func runContainerStatus(cmd *cobra.Command, _ []string) error {
 }
 
 func runContainerStatusWithExec(ex execer, dir string) error {
-	res, err := resolveDir(dir, true)
+	res, err := resolveDir(dir, dirAttach, true)
 	if err != nil {
 		return err
 	}

@@ -9,6 +9,16 @@ import (
 	"github.com/gumieri/nenyactl/internal/paths"
 )
 
+// dirMode selects how a command treats --dir.
+type dirMode int
+
+const (
+	// dirAttach requires --dir to exist (read/modify commands).
+	dirAttach dirMode = iota
+	// dirCreate allows --dir to be created by the command (init/setup/bootstrap).
+	dirCreate
+)
+
 // dirKind describes whether a resolved --dir is a config root (the directory
 // that holds config.json and config.d) or a container deployment root (the
 // directory that holds compose.yml, config/, and secrets/).
@@ -21,22 +31,27 @@ const (
 
 // dirResolution is the single place --dir is interpreted. Every command that
 // accepts --dir routes through resolveDir, so the flag has exactly one meaning:
-//
-//   - --dir points at an existing directory and the layout decides how to read
-//     it (a container deployment if it contains config/config.json or
-//     compose.yml; otherwise a config root);
-//   - with --dir omitted, the command's natural default is used (system config
-//     root for bare metal, the default container directory for containers).
+// a deployment root whose layout determines how it is read.
 type dirResolution struct {
+	// Path is the directory the user pointed at, or the command's default.
 	Path string
+	// Kind records whether Path is a bare-metal config root or a container
+	// deployment root.
 	Kind dirKind
+	// Info holds the resolved config/secrets/unit paths for the deployment.
 	Info *detect.Info
 }
 
-// resolveDir interprets --dir for a command. defaultContainer selects the
-// container default directory when --dir is empty; otherwise the system config
-// root is used.
-func resolveDir(dir string, defaultContainer bool) (dirResolution, error) {
+// resolveDir interprets --dir for a command.
+//
+//   - dirAttach requires the path to exist; a missing path is an error.
+//   - dirCreate accepts a missing path so create-oriented commands can make it.
+//
+// A container layout (config/config.json or compose.yml) resolves to the
+// nested container paths; anything else is treated as a bare-metal config root.
+// An empty --dir uses the supplied default root (system config root unless
+// defaultContainer is set).
+func resolveDir(dir string, mode dirMode, defaultContainer bool) (dirResolution, error) {
 	if dir == "" {
 		if defaultContainer {
 			d, err := paths.ContainerDir()
@@ -48,18 +63,32 @@ func resolveDir(dir string, defaultContainer bool) (dirResolution, error) {
 		return configRoot(paths.SystemConfigDir()), nil
 	}
 
-	if _, err := os.Stat(dir); err != nil {
-		return dirResolution{}, fmt.Errorf("--dir: %w", err)
+	if mode == dirAttach {
+		if _, err := os.Stat(dir); err != nil {
+			return dirResolution{}, fmt.Errorf("--dir: %w", err)
+		}
 	}
 
-	info, err := detect.DetectFromDirAuto(dir)
-	if err != nil {
-		return dirResolution{}, fmt.Errorf("--dir: %w", err)
+	if detect.ModeForDir(dir) == detect.ModeContainer {
+		return containerRoot(dir), nil
 	}
-	if info.Mode == detect.ModeContainer {
-		return dirResolution{Path: dir, Kind: dirContainerRoot, Info: info}, nil
+	return configRoot(dir), nil
+}
+
+// ConfigDir is the directory that holds config.json/config.d for the resolved
+// deployment. Callers that write config must use this, never Path.
+func (r dirResolution) ConfigDir() string {
+	return filepath.Dir(r.Info.ConfigFile)
+}
+
+// SecretsDir is the directory the deployment's secrets live in. Container
+// layouts use <root>/secrets (what the compose mounts as /run/secrets/nenya);
+// bare-metal uses the config root.
+func (r dirResolution) SecretsDir() string {
+	if r.Kind == dirContainerRoot {
+		return filepath.Join(r.Path, "secrets")
 	}
-	return dirResolution{Path: dir, Kind: dirConfigRoot, Info: info}, nil
+	return filepath.Dir(r.Info.ConfigFile)
 }
 
 func configRoot(dir string) dirResolution {

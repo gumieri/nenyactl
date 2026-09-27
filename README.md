@@ -148,10 +148,24 @@ nenyactl secret generate --type client
 nenyactl secret generate --type apikey --name my-app
 ```
 
-> **Config layout caveat.** Nenya reads `<config-root>/config.json` *or*
-> `<config-root>/config.d/*.json` — creating any `config.d/*.json` makes it
-> ignore `config.json` entirely. Prefer editing the single file the detected
-> layout uses.
+> **Config layout caveat.** On released nenya ≤ 0.15, creating any
+> `config.d/*.json` makes it ignore `config.json` entirely. On `main`,
+> `config.json` is the base and `config.d/*.json` layer over it. Treat
+> `nenya describe` as the authority on what is in effect.
+
+### Connect a Client
+
+```bash
+# Print config for a client at the resolved endpoint (token redacted)
+nenyactl client add opencode
+nenyactl client add cursor
+nenyactl client add claude
+nenyactl client add aider
+
+# Include the real token, or write the config (opencode, mode 0600)
+nenyactl client add opencode --show-token
+nenyactl client add opencode --write
+```
 
 ### Version
 
@@ -171,6 +185,7 @@ nenyactl version
 | `containers setup/start/stop/status` | Container deployment |
 | `config init` | Create the initial configuration |
 | `config edit` | Interactive config editor |
+| `client add <name>` | Print (token redacted) or write client config (opencode/cursor/claude/aider) |
 | `secret bootstrap` | Create secret files with a generated client token |
 | `secret generate` | Generate client tokens or API keys |
 | `version` | Show version information |

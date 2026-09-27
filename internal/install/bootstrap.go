@@ -105,6 +105,17 @@ func queryNenyaPaths(ctx context.Context, runner CommandRunner, execPath string)
 	return p, true
 }
 
+// BootstrapConfigContent returns the config content to write for a fresh
+// install: `nenya example-config` (CONTRACT.md §4.4) when available, else a
+// documented minimal shim. It is the single source for both install and
+// `config init`, so the two paths cannot diverge.
+func BootstrapConfigContent(ctx context.Context, runner CommandRunner, execPath string) []byte {
+	if out, err := runner.Output(ctx, execPath, "example-config"); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+		return out
+	}
+	return []byte(minimalConfig)
+}
+
 // bootstrapConfig creates configDir and config.json when absent. Content comes
 // from `nenya example-config` when available, else from minimalConfig.
 func bootstrapConfig(ctx context.Context, runner CommandRunner, execPath string, p installPaths) (bool, error) {
@@ -114,10 +125,7 @@ func bootstrapConfig(ctx context.Context, runner CommandRunner, execPath string,
 		return false, fmt.Errorf("stat %s: %w", p.configFile, err)
 	}
 
-	content := []byte(minimalConfig)
-	if out, err := runner.Output(ctx, execPath, "example-config"); err == nil && len(strings.TrimSpace(string(out))) > 0 {
-		content = out
-	}
+	content := BootstrapConfigContent(ctx, runner, execPath)
 
 	if err := os.MkdirAll(p.configDir, 0o755); err != nil {
 		return false, fmt.Errorf("create config dir %s: %w", p.configDir, err)

@@ -37,15 +37,33 @@ type Info struct {
 	DataDir    string
 }
 
-// SecretsFile returns the single secrets file for the deployment. Bare-metal
-// uses <config-root>/secrets.json (the path wired into the shipped systemd
-// unit); container deployments use the deployment root's secrets.json so the
-// compose mount and the CLI agree.
+// SecretsFile returns the single secrets file for the deployment, matching what
+// the deployment actually loads. Container deployments read secrets/ (mounted as
+// /run/secrets/nenya by the generated compose), so the first client file is
+// returned; bare-metal uses <config-root>/secrets.json (the path wired into the
+// shipped systemd unit).
 func (i *Info) SecretsFile() string {
 	if i.Mode == ModeContainer {
-		return filepath.Join(i.DataDir, "secrets.json")
+		if i.DataDir == "" {
+			return ""
+		}
+		return filepath.Join(i.DataDir, "secrets", "01-client.json")
+	}
+	if i.ConfigFile == "" {
+		return ""
 	}
 	return filepath.Join(filepath.Dir(i.ConfigFile), "secrets.json")
+}
+
+// SecretsDir returns the directory the deployment's secrets live in.
+func (i *Info) SecretsDir() string {
+	if i.Mode == ModeContainer {
+		return filepath.Join(i.DataDir, "secrets")
+	}
+	if i.ConfigFile == "" {
+		return ""
+	}
+	return filepath.Dir(i.ConfigFile)
 }
 
 func Detect() (*Info, error) {

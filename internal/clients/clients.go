@@ -10,8 +10,9 @@ package clients
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
+
+	"github.com/gumieri/nenyactl/internal/jsonc"
 )
 
 // Endpoint is the resolved gateway base URL and client token a client needs.
@@ -64,9 +65,9 @@ type Snippet struct {
 	// ConfigPath is the conventional config file location, when the client
 	// uses one (empty for env-var-only clients).
 	ConfigPath string
-	// MergeKey is the top-level JSON key a merge-style writer must preserve
-	// when updating an existing config file (empty for non-JSON clients).
-	MergeKey string
+	// Mergeable marks snippets nenyactl can merge into an existing JSON config
+	// file (only OpenCode today).
+	Mergeable bool
 }
 
 // Render produces the snippet for a client at an endpoint.
@@ -84,19 +85,6 @@ func Render(name Name, ep Endpoint) (Snippet, error) {
 	default:
 		return Snippet{}, fmt.Errorf("unsupported client %q", name)
 	}
-}
-
-// RenderAll returns every snippet, in Supported order.
-func RenderAll(ep Endpoint) ([]Snippet, error) {
-	out := make([]Snippet, 0, len(Supported()))
-	for _, n := range Supported() {
-		s, err := Render(n, ep)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, s)
-	}
-	return out, nil
 }
 
 func openCode(base, token string) Snippet {
@@ -119,7 +107,7 @@ func openCode(base, token string) Snippet {
 		Description: "Add the provider block to ~/.config/opencode/opencode.json",
 		Body:        string(body),
 		ConfigPath:  "~/.config/opencode/opencode.json",
-		MergeKey:    "provider",
+		Mergeable:   true,
 	}
 }
 
@@ -147,48 +135,39 @@ func aider(base, token string) Snippet {
 	}
 }
 
-// MergeOpenCodeProvider updates an existing OpenCode config's provider.other
-// object for the "nenya" key, preserving every other key. It returns the full
-// merged JSON document. Existing config that is not a JSON object is rejected.
+// MergeOpenCodeProvider updates an existing OpenCode config's provider.nenya
+// object, preserving every other key and any JSONC comments. It returns the
+// full merged document. Existing config that is not a JSON object is rejected.
 func MergeOpenCodeProvider(existing []byte, ep Endpoint) ([]byte, error) {
 	base := strings.TrimRight(ep.BaseURL, "/")
 	snippet := openCode(base, ep.Token)
 
-	var root map[string]any
-	if len(strings.TrimSpace(string(existing))) > 0 {
-		if err := json.Unmarshal(existing, &root); err != nil {
-			return nil, fmt.Errorf("existing opencode.json is not a JSON object: %w", err)
-		}
+	v, err := jsonc.ParseDoc(existing)
+	if err != nil {
+		return nil, err
 	}
-	if root == nil {
-		root = map[string]any{}
+	root, ok := jsonc.GetObject(v)
+	if !ok {
+		return nil, fmt.Errorf("existing opencode.json is not a JSON object")
 	}
-
-	var provider map[string]any
-	if raw, ok := root["provider"].(map[string]any); ok {
-		provider = raw
-	} else {
-		provider = map[string]any{}
-	}
+	_ = root
 
 	var block map[string]any
 	if err := json.Unmarshal([]byte(snippet.Body), &block); err != nil {
 		return nil, err
 	}
-	if built, ok := block["nenya"].(map[string]any); ok {
-		provider["nenya"] = built
+	built, ok := block["nenya"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("internal error: opencode snippet is not a provider object")
 	}
-	root["provider"] = provider
 
-	return json.MarshalIndent(root, "", "  ")
-}
-
-// SortedKeys is a small helper for deterministic output in callers.
-func SortedKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+	provider := jsonc.EnsureObject(v, "provider")
+	if provider == nil {
+		return nil, fmt.Errorf("existing opencode.json is not a JSON object")
 	}
-	sort.Strings(keys)
-	return keys
+	if err := jsonc.SetValue(provider, "nenya", built); err != nil {
+		return nil, err
+	}
+
+	return jsonc.Render(v)
 }

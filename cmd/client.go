@@ -3,12 +3,15 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/gumieri/nenyactl/internal/clients"
 	"github.com/gumieri/nenyactl/internal/containers"
+	"github.com/gumieri/nenyactl/internal/jsonc"
+	"github.com/gumieri/nenyactl/internal/paths"
 	"github.com/spf13/cobra"
 )
 
@@ -19,7 +22,8 @@ var clientCmd = &cobra.Command{
 OpenAI-compatible API: OpenCode, Cursor, Claude Code, and Aider.
 
 The endpoint (published port) and token come from the resolved deployment,
-so the output matches what is actually running.`,
+so the output matches what is actually running. Tokens are only printed when
+you ask for them.`,
 }
 
 var clientAddCmd = &cobra.Command{
@@ -27,16 +31,19 @@ var clientAddCmd = &cobra.Command{
 	Short: "Print or write client configuration",
 	Long: `Render client configuration from the resolved endpoint and token.
 
-With --write, a JSON client config (opencode) is merged into its file,
-preserving unrelated keys. Other clients print a snippet only.`,
+By default the snippet is printed with the token redacted. Pass
+--show-token to include the real token. With --write, a JSON client config
+(opencode) is merged into its file, preserving unrelated keys; other
+clients print a snippet only.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runClientAdd,
 }
 
 var (
-	clientDir    string
-	clientWrite  bool
-	clientOutput string
+	clientDir       string
+	clientWrite     bool
+	clientOutput    string
+	clientShowToken bool
 )
 
 func init() {
@@ -45,7 +52,9 @@ func init() {
 	f := clientAddCmd.Flags()
 	f.StringVar(&clientDir, "dir", "", "Config root or container directory (default: system config root)")
 	f.BoolVar(&clientWrite, "write", false, "Write the client config file instead of printing (JSON clients only)")
-	f.StringVarP(&clientOutput, "output", "o", "", "Write the snippet to this file")
+	f.StringVarP(&clientOutput, "output", "o", "", "Write the snippet to this file (mode 0600)")
+	f.BoolVar(&clientShowToken, "show-token", false, "Include the real token in printed output")
+	clientAddCmd.MarkFlagsMutuallyExclusive("write", "output")
 }
 
 func runClientAdd(cmd *cobra.Command, args []string) error {
@@ -53,8 +62,11 @@ func runClientAdd(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	if clientShowToken && (clientWrite || clientOutput != "") {
+		return fmt.Errorf("--show-token only applies to printed output")
+	}
 
-	res, err := resolveDir(clientDir, false)
+	res, err := resolveDir(clientDir, dirAttach, false)
 	if err != nil {
 		return err
 	}
@@ -70,28 +82,47 @@ func runClientAdd(cmd *cobra.Command, args []string) error {
 
 	switch {
 	case clientWrite:
-		if snippet.MergeKey == "" {
+		if !snippet.Mergeable {
 			return fmt.Errorf("--write is only supported for JSON clients that nenyactl can merge (opencode); use -o to save the snippet")
 		}
 		return writeClientConfig(snippet, ep)
 	case clientOutput != "":
+		if err := os.MkdirAll(filepath.Dir(clientOutput), 0o755); err != nil {
+			return fmt.Errorf("create output dir: %w", err)
+		}
 		if err := os.WriteFile(clientOutput, []byte(snippet.Body+"\n"), 0o600); err != nil {
 			return fmt.Errorf("write %s: %w", clientOutput, err)
+		}
+		if err := os.Chmod(clientOutput, 0o600); err != nil {
+			return fmt.Errorf("chmod %s: %w", clientOutput, err)
 		}
 		fmt.Println(successStyle.Render("✓"), "Wrote", clientOutput)
 		return nil
 	default:
+		body := snippet.Body
+		if !clientShowToken {
+			body = redactToken(body, ep.Token)
+		}
 		fmt.Println(dimStyle.Render("  " + snippet.Description))
 		fmt.Println()
-		fmt.Println(snippet.Body)
+		fmt.Println(body)
+		if !clientShowToken {
+			fmt.Println()
+			fmt.Println(dimStyle.Render("  Token redacted; pass --show-token to print it."))
+		}
 		return nil
 	}
 }
 
 // resolvedEndpoint reads the published port and client token from a resolved
-// deployment. It never hardcodes 8080 or a specific secrets filename.
+// deployment. It never hardcodes a token location; for bare-metal it reads the
+// effective listen address from the config file when present.
 func resolvedEndpoint(res dirResolution) (clients.Endpoint, error) {
-	base := "http://localhost:" + containers.PublishedPort(res.Path)
+	port := containers.PublishedPort(res.Path)
+	if p := listenPort(res.Info.ConfigFile); p != "" {
+		port = p
+	}
+	base := "http://localhost:" + port
 
 	token := containers.ClientToken(res.Path)
 	if token == "" {
@@ -103,7 +134,30 @@ func resolvedEndpoint(res dirResolution) (clients.Endpoint, error) {
 	return clients.Endpoint{BaseURL: base, Token: token}, nil
 }
 
+// listenPort extracts the port from server.listen_addr in a JSONC config file.
+// It returns "" when the file or field is absent/unparseable.
+func listenPort(configFile string) string {
+	v, err := jsonc.ReadFile(configFile)
+	if err != nil {
+		return ""
+	}
+	field, ok := jsonc.GetNestedField(v, []string{"server", "listen_addr"})
+	if !ok {
+		return ""
+	}
+	addr := jsonc.FieldValueString(field)
+	addr = strings.Trim(addr, `"`)
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	return port
+}
+
 func readSecretsToken(path string) string {
+	if path == "" {
+		return ""
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
@@ -117,21 +171,34 @@ func readSecretsToken(path string) string {
 	return s.ClientToken
 }
 
+// redactToken replaces the token with a placeholder in printed output.
+func redactToken(body, token string) string {
+	if token == "" {
+		return body
+	}
+	return strings.ReplaceAll(body, token, "<client-token>")
+}
+
 // writeClientConfig merges the snippet into the client's config file. It
-// expands a leading ~ and preserves every unrelated key.
+// expands a leading ~ and preserves every unrelated key. The file holds a
+// credential, so it is always written mode 0600.
 func writeClientConfig(snippet clients.Snippet, ep clients.Endpoint) error {
-	path := expandHome(snippet.ConfigPath)
+	path, err := expandHome(snippet.ConfigPath)
+	if err != nil {
+		return err
+	}
 	if path == "" {
 		return fmt.Errorf("client %s has no known config path", snippet.Name)
 	}
 
 	var existing []byte
-	if data, err := os.ReadFile(path); err == nil {
+	if data, readErr := os.ReadFile(path); readErr == nil {
 		existing = data
+	} else if !os.IsNotExist(readErr) {
+		return fmt.Errorf("read %s: %w", path, readErr)
 	}
 
 	var merged []byte
-	var err error
 	switch snippet.Name {
 	case clients.OpenCode:
 		merged, err = clients.MergeOpenCodeProvider(existing, ep)
@@ -142,34 +209,41 @@ func writeClientConfig(snippet clients.Snippet, ep clients.Endpoint) error {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
-	if err := os.WriteFile(path, merged, 0o644); err != nil {
+	if err := os.WriteFile(path, merged, 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
-	fmt.Println(successStyle.Render("✓"), "Updated", path)
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("chmod %s: %w", path, err)
+	}
+	fmt.Println(successStyle.Render("✓"), "Updated", path, "(mode 0600)")
 	return nil
 }
 
-func expandHome(path string) string {
+// expandHome resolves a leading ~ using the user's home directory. It returns
+// an error when the home directory cannot be determined.
+func expandHome(path string) (string, error) {
 	if path == "" {
-		return ""
+		return "", nil
+	}
+	if path == "~" {
+		return os.UserHomeDir()
 	}
 	if strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return ""
+			return "", fmt.Errorf("resolve home dir: %w", err)
 		}
-		return filepath.Join(home, path[2:])
+		return filepath.Join(home, path[2:]), nil
 	}
-	return path
+	return path, nil
 }
 
-// printClientSnippets prints a short client-setup block with the resolved
-// endpoint and token. Callers use it at the end of a successful install or
-// `up` so the next action is copy-paste. It is best-effort: a missing token is
-// reported, not fatal.
+// printClientSnippets prints a short connect block with the resolved endpoint
+// and a redacted token, so the next action is copy-paste. It is best-effort and
+// never prints the token itself.
 func printClientSnippets(res dirResolution) {
 	ep, err := resolvedEndpoint(res)
 	if err != nil {
@@ -177,24 +251,24 @@ func printClientSnippets(res dirResolution) {
 	}
 	fmt.Println()
 	fmt.Println(infoStyle.Render("›"), "Connect a client to", ep.BaseURL)
-	fmt.Println(dimStyle.Render("   Authorization: Bearer " + ep.Token))
 	for _, name := range clients.Supported() {
 		snippet, rerr := clients.Render(name, ep)
 		if rerr != nil {
 			continue
 		}
-		fmt.Println()
 		fmt.Println(dimStyle.Render("  " + string(name) + ": " + snippet.Description))
-		fmt.Println(indent(snippet.Body, "    "))
 	}
 	fmt.Println()
-	fmt.Println(dimStyle.Render("  Full config: nenyactl client add <opencode|cursor|claude|aider>"))
+	fmt.Println(dimStyle.Render("  Full config: nenyactl client add <opencode|cursor|claude|aider> --show-token"))
 }
 
-func indent(s, prefix string) string {
-	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
-	for i, l := range lines {
-		lines[i] = prefix + l
+// installResolution resolves the deployment created by an install so callers
+// can print the connect block for the right root (--user vs system).
+func installResolution(userInstall bool, systemConfigDir string) dirResolution {
+	if userInstall {
+		if dir, err := paths.UserConfigDir(); err == nil {
+			return configRoot(dir)
+		}
 	}
-	return strings.Join(lines, "\n")
+	return configRoot(systemConfigDir)
 }

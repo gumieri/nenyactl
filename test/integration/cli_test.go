@@ -182,25 +182,49 @@ func TestAgentsCommand(t *testing.T) {
 }
 
 // TestDirSemanticsConsistent asserts --dir has one meaning: a container layout
-// is accepted by every --dir command without needing a mode flag.
+// is written to the nested paths everywhere, and create commands accept a
+// directory that does not exist yet.
 func TestDirSemanticsConsistent(t *testing.T) {
-	tmp := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(tmp, "config"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(tmp, "config", "config.json"), []byte(`{}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	for _, args := range [][]string{
-		{"config", "init", "--dir", tmp},
-		{"secret", "bootstrap", "--dir", tmp},
-	} {
-		_, stderr, err := runNenyactl(t, args...)
-		if err != nil && (strings.Contains(stderr, "--dir") || strings.Contains(stderr, "invalid mode")) {
-			t.Errorf("%v rejected a container layout: %v\n%s", args, err, stderr)
+	t.Run("container layout writes nested paths", func(t *testing.T) {
+		tmp := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(tmp, "config"), 0o755); err != nil {
+			t.Fatal(err)
 		}
-	}
+		if err := os.WriteFile(filepath.Join(tmp, "config", "config.json"), []byte(`{}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		// secret bootstrap must land where the generated compose mounts secrets.
+		if _, stderr, err := runNenyactl(t, "secret", "bootstrap", "--dir", tmp); err != nil {
+			t.Fatalf("secret bootstrap --dir (container): %v\n%s", err, stderr)
+		}
+		if _, err := os.Stat(filepath.Join(tmp, "secrets", "01-client.json")); err != nil {
+			t.Errorf("expected secrets/01-client.json: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(tmp, "secrets.json")); err == nil {
+			t.Error("wrote a root-level secrets.json the container never reads")
+		}
+	})
+
+	t.Run("create commands accept a missing directory", func(t *testing.T) {
+		base := t.TempDir()
+		for _, tc := range []struct {
+			args []string
+			path string
+		}{
+			{[]string{"config", "init", "--dir", filepath.Join(base, "cfg")}, filepath.Join(base, "cfg", "config.json")},
+			// create mode writes to the resolved secrets dir with a client file.
+			{[]string{"secret", "bootstrap", "--dir", filepath.Join(base, "sec")}, filepath.Join(base, "sec", "01-client.json")},
+		} {
+			_, stderr, err := runNenyactl(t, tc.args...)
+			if err != nil {
+				t.Fatalf("%v: %v\n%s", tc.args, err, stderr)
+			}
+			if _, err := os.Stat(tc.path); err != nil {
+				t.Errorf("%v did not create %s: %v", tc.args, tc.path, err)
+			}
+		}
+	})
 }
 
 func TestWriteAgentsConfig(t *testing.T) {

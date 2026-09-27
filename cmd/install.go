@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/gumieri/nenyactl/internal/install"
+	"github.com/gumieri/nenyactl/internal/paths"
 	"github.com/spf13/cobra"
 )
 
@@ -29,6 +30,7 @@ var (
 	installUser       bool
 	installSkipSvc    bool
 	installSkipVerify bool
+	installConnect    bool
 )
 
 func init() {
@@ -36,6 +38,7 @@ func init() {
 	installCmd.Flags().BoolVar(&installUser, "user", false, "Install to user bin dir instead of system-wide")
 	installCmd.Flags().BoolVar(&installSkipSvc, "skip-service", false, "Install binary only, skip service configuration")
 	installCmd.Flags().BoolVar(&installSkipVerify, "skip-verify", false, "Skip cosign signature verification (SHA-256 is still enforced)")
+	installCmd.Flags().BoolVar(&installConnect, "connect", false, "Print client connection info after install (token is redacted)")
 }
 
 func runInstall(cmd *cobra.Command, args []string) error {
@@ -59,11 +62,8 @@ func runInstall(cmd *cobra.Command, args []string) error {
 
 	fmt.Println(successStyle.Render("✓"), "nenya installed successfully")
 
-	// Surface the resolved endpoint/token so the next action is copy-paste.
-	if !installSkipSvc {
-		if res, err := resolveDir("", false); err == nil {
-			printClientSnippets(res)
-		}
+	if installConnect && !installSkipSvc {
+		printClientSnippets(installResolution(installUser, paths.SystemConfigDir()))
 	}
 	return nil
 }
