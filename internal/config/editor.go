@@ -80,10 +80,25 @@ type configModel struct {
 func newConfigModel(cfg *hujson.Value, effective []byte) configModel {
 	sections := jsonc.TopLevelKeys(cfg)
 
+	// The effective config from describe already contains an "agents" section
+	// once agents are configured; only add the synthetic one when it is absent
+	// so the editor never renders two agents rows.
+	hasAgents := false
+	for _, key := range sections {
+		if key == "agents" {
+			hasAgents = true
+			break
+		}
+	}
+	extra := 0
+	if !hasAgents {
+		extra = 1
+	}
+
 	m := configModel{
 		screen:       screenSections,
 		config:       cfg,
-		sections:     make([]sectionInfo, len(sections)+1), // +1 for agents section
+		sections:     make([]sectionInfo, len(sections)+extra),
 		cursor:       0,
 		editInput:    textinput.New(),
 		sectionsView: viewport.New(0, 0),
@@ -103,10 +118,13 @@ func newConfigModel(cfg *hujson.Value, effective []byte) configModel {
 			isAgent: false,
 		}
 	}
-	// Add agents section at the end
-	m.sections[len(sections)] = sectionInfo{
-		name:    "agents",
-		isAgent: true,
+	// Add the synthetic agents section at the end when the effective config
+	// does not already carry one.
+	if !hasAgents {
+		m.sections[len(sections)] = sectionInfo{
+			name:    "agents",
+			isAgent: true,
+		}
 	}
 
 	// Initialize agents UI state
@@ -423,9 +441,15 @@ func (m *configModel) applyEdit() {
 	entry.Value.Value = parseLiteralValue(raw)
 
 	// Record the change by dotted key; the caller applies it through nenya's
-	// single writer. nenyactl does not choose the target file or merge. Config
-	// keys are fixed identifiers without dots, so the dotted form is unambiguous.
-	m.changes[m.activeSection+"."+entry.Key] = string(parseLiteralValue(raw))
+	// single writer. nenyactl does not choose the target file or merge. When
+	// the section is a top-level scalar, loadSection keys the single entry by
+	// the section name itself, so the dotted form would double it (foo.foo);
+	// use the bare key in that case.
+	dottedKey := m.activeSection + "." + entry.Key
+	if entry.Key == m.activeSection {
+		dottedKey = entry.Key
+	}
+	m.changes[dottedKey] = string(parseLiteralValue(raw))
 }
 
 func (m *configModel) scrollSections() {

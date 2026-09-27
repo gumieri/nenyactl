@@ -65,6 +65,55 @@ func TestNewConfigModel(t *testing.T) {
 	}
 }
 
+func TestNewConfigModelDoesNotDuplicateAgents(t *testing.T) {
+	// The effective config from describe already contains "agents" once agents
+	// are configured; the editor must not add a second synthetic row.
+	effective := `{"server":{"listen_addr":":8080"},"agents":{"build":{"strategy":"fallback","models":["m"]}}}`
+	cfg, err := jsonc.ParseDoc([]byte(effective))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := newConfigModel(cfg, []byte(effective))
+
+	count := 0
+	for _, s := range m.sections {
+		if s.name == "agents" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("agents sections = %d, want 1: %+v", count, m.sections)
+	}
+}
+
+func TestApplyEditTopLevelScalarKey(t *testing.T) {
+	// A top-level scalar section keys its single entry by the section name, so
+	// the recorded dotted key must not become "foo.foo".
+	scalar := `{"log_level":"info"}`
+	cfg, err := jsonc.ParseDoc([]byte(scalar))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := newConfigModel(cfg, []byte(scalar))
+	m.loadSection("log_level")
+	if len(m.entries) != 1 || m.entries[0].Key != "log_level" {
+		t.Fatalf("entries = %+v, want one log_level entry", m.entries)
+	}
+
+	m.cursor = 0
+	m.editInput.SetValue("debug")
+	m.applyEdit()
+
+	if _, ok := m.changes["log_level.log_level"]; ok {
+		t.Errorf("recorded a doubled key: %v", m.changes)
+	}
+	if got := m.changes["log_level"]; got != `"debug"` {
+		t.Errorf("recorded change = %q, want %q (changes: %v)", got, `"debug"`, m.changes)
+	}
+}
+
 func TestLoadSection(t *testing.T) {
 	cfg, err := jsonc.ParseDoc([]byte(testConfig))
 	if err != nil {
