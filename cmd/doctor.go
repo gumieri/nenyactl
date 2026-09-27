@@ -110,6 +110,10 @@ func deploymentFix(err error) string {
 	if errors.As(err, &perm) {
 		return "check file permissions; re-run with sudo if the config is root-owned"
 	}
+	var ambiguous *detect.AmbiguousError
+	if errors.As(err, &ambiguous) {
+		return "pass --dir to choose which installation to act on"
+	}
 	return "nenyactl up"
 }
 
@@ -183,15 +187,16 @@ func checkSecrets(res dirResolution, desc nenya.Description, haveDesc bool) chec
 		return checkResult{Name: "secrets", Status: checkOK, Detail: "systemd credential source: " + desc.Secrets.ActiveSource}
 	}
 
-	files := secretFilesIn(dir)
-	if len(files) == 0 {
+	if secrets.ExistingTokenFile(dir) == "" {
 		return checkResult{Name: "secrets", Status: checkFail, Detail: "no client token in " + dir, Fix: "run `nenyactl up`"}
 	}
 
+	// Check permissions on every secrets file, not just the token-bearing one.
+	files := secretFilesIn(dir, res.Info.ConfigFile)
 	var loose []string
 	for _, f := range files {
 		if info, err := os.Stat(f); err == nil && info.Mode().Perm()&0o077 != 0 {
-			loose = append(loose, fmt.Sprintf("%s (%04o)", f, info.Mode().Perm()))
+			loose = append(loose, f)
 		}
 	}
 	if len(loose) > 0 {
@@ -200,10 +205,10 @@ func checkSecrets(res dirResolution, desc nenya.Description, haveDesc bool) chec
 	return checkResult{Name: "secrets", Status: checkOK, Detail: fmt.Sprintf("%d file(s) in %s", len(files), dir)}
 }
 
-// secretFilesIn returns every secrets file (not directory) under dir that
-// actually carries a client_token, so an unrelated config.json beside it is not
-// mistaken for a secrets file.
-func secretFilesIn(dir string) []string {
+// secretFilesIn returns every secrets file under dir (excluding the config file,
+// which shares the bare-metal directory), regardless of whether it carries a
+// token, so permissions are checked on all of them.
+func secretFilesIn(dir, exclude string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
@@ -217,8 +222,7 @@ func secretFilesIn(dir string) []string {
 			continue
 		}
 		p := filepath.Join(dir, e.Name())
-		data, err := os.ReadFile(p)
-		if err != nil || !secrets.HasClientToken(data) {
+		if p == exclude {
 			continue
 		}
 		files = append(files, p)

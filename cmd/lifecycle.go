@@ -120,7 +120,8 @@ func buildStatus(ctx context.Context, res dirResolution, doer healthDoer) string
 		label = "Deployment"
 	}
 	fmt.Fprintf(&b, "Mode:        %s\n", mode)
-	fmt.Fprintf(&b, "%s:%s%s\n", label, strings.Repeat(" ", max(1, 12-len(label))), res.Path)
+	pad := strings.Repeat(" ", max(1, 12-len(label)))
+	fmt.Fprintf(&b, "%s:%s%s\n", label, pad, res.Path)
 
 	// nenya's resolved paths are authoritative once describe succeeds.
 	configDir := res.ConfigDir()
@@ -150,7 +151,6 @@ func buildStatus(ctx context.Context, res dirResolution, doer healthDoer) string
 	}
 	fmt.Fprintf(&b, "Config dir:  %s\n", configDir)
 	fmt.Fprintf(&b, "Secrets dir: %s\n", secretsDir)
-
 	port := statusPort(res, desc, haveDesc)
 	if port == "" {
 		fmt.Fprintf(&b, "Port:        unknown\n")
@@ -235,6 +235,9 @@ func healthStatus(ctx context.Context, doer healthDoer, port string) (bool, stri
 	resp, err := doer.Do(req)
 	if err != nil {
 		return false, "unreachable (" + err.Error() + ")"
+	}
+	if resp == nil {
+		return false, "no response"
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusOK {

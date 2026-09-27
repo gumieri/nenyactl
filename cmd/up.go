@@ -74,6 +74,9 @@ func ensureDeployment(ctx context.Context, dir string) (dirResolution, error) {
 	if isInstallationStateError(err) {
 		return dirResolution{}, err
 	}
+	if isAmbiguousInstall(err) {
+		return dirResolution{}, fmt.Errorf("%w\n\npass --dir to choose which installation to act on", err)
+	}
 
 	fmt.Println(infoStyle.Render("›"), "No Nenya installation detected; installing the service")
 	if installErr := upInstall(ctx, install.Config{}); installErr != nil {
@@ -95,6 +98,13 @@ func isInstallationStateError(err error) bool {
 	return errors.As(err, &cfg) || errors.As(err, &perm)
 }
 
+// isAmbiguousInstall reports whether detection found more than one installation.
+// Installing again would be wrong, so up asks for --dir instead.
+func isAmbiguousInstall(err error) bool {
+	var ambiguous *detect.AmbiguousError
+	return errors.As(err, &ambiguous)
+}
+
 // upDeployment drives a resolved deployment to a healthy, reachable state. It
 // is separated from the command so it can be tested with a fake contract,
 // health doer, and start function.
@@ -114,6 +124,13 @@ func upDeployment(ctx context.Context, res dirResolution, doer healthDoer, healt
 
 	if err := startDeployment(res); err != nil {
 		return err
+	}
+	// Keys saved above are not loaded by an already-running service; nudge it
+	// to reload so the just-configured providers take effect.
+	if res.Kind == dirConfigRoot && len(desc.Providers.Configured) == 0 {
+		if err := runServiceReloadWithExec(defaultExec); err != nil {
+			fmt.Println(dimStyle.Render("  (could not reload the service: " + err.Error() + ")"))
+		}
 	}
 
 	port := statusPort(res, desc, descErr == nil)
