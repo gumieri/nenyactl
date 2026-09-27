@@ -25,7 +25,7 @@ Use --dir to override automatic detection.
 func init() {
 	rootCmd.AddCommand(agentsCmd)
 	agentsCmd.RunE = runAgents
-	agentsCmd.Flags().StringVar(&agentsDir, "dir", "", "Configuration directory (skips auto-detection)")
+	agentsCmd.Flags().StringVar(&agentsDir, "dir", "", "Config root or container directory (auto-detected; skips installation detection)")
 	agentsCmd.Flags().StringVar(&agentsMode, "mode", "", "Deployment mode for --dir: bare-metal or container (default: auto-detect)")
 }
 
@@ -35,30 +35,29 @@ var (
 )
 
 func runAgents(cmd *cobra.Command, args []string) error {
-	var info *detect.Info
-	var err error
-
 	if agentsMode != "" && agentsDir == "" {
 		return fmt.Errorf("--mode requires --dir")
 	}
 
+	var info *detect.Info
 	if agentsDir != "" {
-		if _, statErr := os.Stat(agentsDir); statErr != nil {
-			return fmt.Errorf("--dir: %w", statErr)
+		var err error
+		info, err = detect.DetectFromDirAuto(agentsDir)
+		if err != nil {
+			return fmt.Errorf("--dir: %w", err)
 		}
-		if agentsMode == "" {
-			info, err = detect.DetectFromDirAuto(agentsDir)
-		} else {
+		if agentsMode != "" {
 			mode, modeErr := parseAgentsMode(agentsMode)
 			if modeErr != nil {
 				return modeErr
 			}
 			info, err = detect.DetectFromDir(agentsDir, mode)
-		}
-		if err != nil {
-			return err
+			if err != nil {
+				return err
+			}
 		}
 	} else {
+		var err error
 		info, err = detect.Detect()
 		if err != nil {
 			return err

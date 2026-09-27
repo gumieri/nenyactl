@@ -86,18 +86,22 @@ Existing secrets files are NOT overwritten.`,
 var bootstrapDir string
 
 func init() {
-	secretBootstrapCmd.Flags().StringVar(&bootstrapDir, "dir", paths.SystemConfigDir(), "Secrets directory")
+	secretBootstrapCmd.Flags().StringVar(&bootstrapDir, "dir", "", "Config root or container directory (default: system config root)")
 }
 
 func runSecretBootstrap(cmd *cobra.Command, args []string) error {
-	secretsPath := filepath.Join(bootstrapDir, "secrets.json")
+	res, err := resolveDir(bootstrapDir, false)
+	if err != nil {
+		return err
+	}
+	secretsPath := res.Info.SecretsFile()
 
 	if _, err := os.Stat(secretsPath); err == nil {
 		return fmt.Errorf("%s already exists, refusing to overwrite", secretsPath)
 	}
 
-	if err := os.MkdirAll(bootstrapDir, 0o755); err != nil {
-		return fmt.Errorf("create directory %s: %w", bootstrapDir, err)
+	if err := os.MkdirAll(filepath.Dir(secretsPath), 0o755); err != nil {
+		return fmt.Errorf("create directory %s: %w", filepath.Dir(secretsPath), err)
 	}
 
 	token := secrets.GenerateClientToken()

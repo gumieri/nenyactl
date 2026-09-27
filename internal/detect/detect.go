@@ -37,6 +37,17 @@ type Info struct {
 	DataDir    string
 }
 
+// SecretsFile returns the single secrets file for the deployment. Bare-metal
+// uses <config-root>/secrets.json (the path wired into the shipped systemd
+// unit); container deployments use the deployment root's secrets.json so the
+// compose mount and the CLI agree.
+func (i *Info) SecretsFile() string {
+	if i.Mode == ModeContainer {
+		return filepath.Join(i.DataDir, "secrets.json")
+	}
+	return filepath.Join(filepath.Dir(i.ConfigFile), "secrets.json")
+}
+
 func Detect() (*Info, error) {
 	look := func(name string) (string, error) {
 		if p, err := exec.LookPath(name); err == nil {

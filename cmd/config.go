@@ -39,25 +39,15 @@ Use --dir to specify a custom path.`,
 var configDir string
 
 func init() {
-	configInitCmd.Flags().StringVar(&configDir, "dir", "", "Configuration directory (default: auto-detect)")
+	configInitCmd.Flags().StringVar(&configDir, "dir", "", "Config root or container directory (default: system config root)")
 }
 
 func runConfigInit(cmd *cobra.Command, args []string) error {
-	dir := configDir
-	if dir == "" {
-		info, err := detect.Detect()
-		if err != nil {
-			dir = paths.SystemConfigDir()
-			fmt.Println(dimStyle.Render("  ⚠ auto-detection failed, using default:"), dir)
-		} else {
-			switch info.Mode {
-			case detect.ModeBareMetal:
-				dir = paths.SystemConfigDir()
-			case detect.ModeContainer:
-				dir = info.DataDir + "/config"
-			}
-		}
+	res, err := resolveDir(configDir, false)
+	if err != nil {
+		return err
 	}
+	dir := res.Path
 
 	if err := bootstrapConfig(dir); err != nil {
 		return fmt.Errorf("config init: %w", err)
@@ -103,7 +93,7 @@ Use --dir to override automatic detection.`,
 var configEditDir string
 
 func init() {
-	configEditCmd.Flags().StringVar(&configEditDir, "dir", "", "Configuration directory (skips auto-detection)")
+	configEditCmd.Flags().StringVar(&configEditDir, "dir", "", "Config root or container directory (auto-detected)")
 }
 
 func runConfigEdit(cmd *cobra.Command, args []string) error {
@@ -111,11 +101,12 @@ func runConfigEdit(cmd *cobra.Command, args []string) error {
 	var configD string
 
 	if configEditDir != "" {
-		if _, statErr := os.Stat(configEditDir); statErr != nil {
-			return fmt.Errorf("--dir: %w", statErr)
+		res, err := resolveDir(configEditDir, false)
+		if err != nil {
+			return err
 		}
-		configFile = configEditDir + "/config.json"
-		configD = configEditDir
+		configFile = res.Info.ConfigFile
+		configD = res.Info.ConfigD
 	} else {
 		info, err := detect.Detect()
 		if err != nil {

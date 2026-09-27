@@ -50,7 +50,7 @@ func TestRunContainerStartWithExec(t *testing.T) {
 				return &fakeCmd{runFn: func() error { return nil }}
 			},
 		}
-		if err := runContainerStartWithExec(ex, "/tmp/test"); err != nil {
+		if err := runContainerStartWithExec(ex, t.TempDir()); err != nil {
 			t.Fatalf("runContainerStartWithExec() error = %v", err)
 		}
 		if !ran {
@@ -81,7 +81,7 @@ func TestRunContainerStartWithExec(t *testing.T) {
 				return &fakeCmd{runFn: func() error { return errors.New("exec failed") }}
 			},
 		}
-		err := runContainerStartWithExec(ex, "/tmp/test")
+		err := runContainerStartWithExec(ex, t.TempDir())
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -183,7 +183,7 @@ func TestRunContainerStart(t *testing.T) {
 		}
 		defer func() { defaultExec = saved }()
 
-		containerSetupCfg.dir = "/tmp/test"
+		containerSetupCfg.dir = t.TempDir()
 		if err := runContainerStart(nil, nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -200,7 +200,7 @@ func TestRunContainerStop(t *testing.T) {
 		}
 		defer func() { defaultExec = saved }()
 
-		containerSetupCfg.dir = "/tmp/test"
+		containerSetupCfg.dir = t.TempDir()
 		if err := runContainerStop(nil, nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -217,7 +217,7 @@ func TestRunContainerStatus(t *testing.T) {
 		}
 		defer func() { defaultExec = saved }()
 
-		containerSetupCfg.dir = "/tmp/test"
+		containerSetupCfg.dir = t.TempDir()
 		if err := runContainerStatus(nil, nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -290,7 +290,7 @@ func TestRunContainerStopWithExec(t *testing.T) {
 				return &fakeCmd{runFn: func() error { return nil }}
 			},
 		}
-		if err := runContainerStopWithExec(ex, "/tmp/test"); err != nil {
+		if err := runContainerStopWithExec(ex, t.TempDir()); err != nil {
 			t.Fatalf("runContainerStopWithExec() error = %v", err)
 		}
 	})
@@ -301,7 +301,7 @@ func TestRunContainerStopWithExec(t *testing.T) {
 				return &fakeCmd{runFn: func() error { return errors.New("stop failed") }}
 			},
 		}
-		err := runContainerStopWithExec(ex, "/tmp/test")
+		err := runContainerStopWithExec(ex, t.TempDir())
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -338,7 +338,7 @@ func TestRunContainerStatusWithExec(t *testing.T) {
 				return &fakeCmd{runFn: func() error { return nil }}
 			},
 		}
-		err := runContainerStatusWithExec(ex, "/tmp/test")
+		err := runContainerStatusWithExec(ex, t.TempDir())
 		if err != nil {
 			t.Fatalf("runContainerStatusWithExec() error = %v", err)
 		}
@@ -350,7 +350,7 @@ func TestRunContainerStatusWithExec(t *testing.T) {
 				return &fakeCmd{runFn: func() error { return errors.New("status failed") }}
 			},
 		}
-		err := runContainerStatusWithExec(ex, "/tmp/test")
+		err := runContainerStatusWithExec(ex, t.TempDir())
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}

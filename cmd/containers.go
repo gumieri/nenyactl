@@ -94,7 +94,7 @@ Default directory: ` + containerDefaultDir() + `
 
 func init() {
 	f := containerSetupCmd.Flags()
-	f.StringVar(&containerSetupCfg.dir, "dir", "", "Output directory (default: XDG_DATA_HOME/nenyactl/nenya)")
+	f.StringVar(&containerSetupCfg.dir, "dir", "", "Container deployment directory (default: XDG_DATA_HOME/nenyactl/nenya)")
 	f.StringVar(&containerSetupCfg.listenAddr, "listen", ":8080", "Listen address")
 	f.BoolVar(&containerSetupCfg.start, "start", false, "Auto-start containers after setup")
 }
@@ -111,13 +111,11 @@ func runContainerSetup(cmd *cobra.Command, args []string) error {
 }
 
 func runContainerSetupWithExec(ex execer, dir, listenAddr string, startAfter bool) error {
-	if dir == "" {
-		d, err := ctpaths.ContainerDir()
-		if err != nil {
-			return fmt.Errorf("cannot determine default directory: %w", err)
-		}
-		dir = d
+	res, err := resolveDir(dir, true)
+	if err != nil {
+		return err
 	}
+	dir = res.Path
 
 	fmt.Println(infoStyle.Render("›"), "Setting up Nenya in:", dir)
 
@@ -183,7 +181,7 @@ var containerStartCmd = &cobra.Command{
 
 func init() {
 	f := containerStartCmd.Flags()
-	f.StringVar(&containerSetupCfg.dir, "dir", "", "Container directory")
+	f.StringVar(&containerSetupCfg.dir, "dir", "", "Container deployment directory (default: XDG_DATA_HOME/nenyactl/nenya)")
 }
 
 func runContainerStart(cmd *cobra.Command, args []string) error {
@@ -191,13 +189,11 @@ func runContainerStart(cmd *cobra.Command, args []string) error {
 }
 
 func runContainerStartWithExec(ex execer, dir string) error {
-	if dir == "" {
-		d, err := ctpaths.ContainerDir()
-		if err != nil {
-			return fmt.Errorf("cannot determine default directory: %w", err)
-		}
-		dir = d
+	res, err := resolveDir(dir, true)
+	if err != nil {
+		return err
 	}
+	dir = res.Path
 
 	runtime, composeArgs, _ := ctpaths.ComposeCmd()
 	composeArgs = append(composeArgs, "up", "-d")
@@ -217,7 +213,7 @@ var containerStopCmd = &cobra.Command{
 
 func init() {
 	f := containerStopCmd.Flags()
-	f.StringVar(&containerSetupCfg.dir, "dir", "", "Container directory")
+	f.StringVar(&containerSetupCfg.dir, "dir", "", "Container deployment directory (default: XDG_DATA_HOME/nenyactl/nenya)")
 }
 
 func runContainerStop(cmd *cobra.Command, _ []string) error {
@@ -225,13 +221,11 @@ func runContainerStop(cmd *cobra.Command, _ []string) error {
 }
 
 func runContainerStopWithExec(ex execer, dir string) error {
-	if dir == "" {
-		d, err := ctpaths.ContainerDir()
-		if err != nil {
-			return fmt.Errorf("cannot determine default directory: %w", err)
-		}
-		dir = d
+	res, err := resolveDir(dir, true)
+	if err != nil {
+		return err
 	}
+	dir = res.Path
 
 	runtime, composeArgs, _ := ctpaths.ComposeCmd()
 	composeArgs = append(composeArgs, "down")
@@ -251,7 +245,7 @@ var containerStatusCmd = &cobra.Command{
 
 func init() {
 	f := containerStatusCmd.Flags()
-	f.StringVar(&containerSetupCfg.dir, "dir", "", "Container directory")
+	f.StringVar(&containerSetupCfg.dir, "dir", "", "Container deployment directory (default: XDG_DATA_HOME/nenyactl/nenya)")
 }
 
 func runContainerStatus(cmd *cobra.Command, _ []string) error {
@@ -259,13 +253,11 @@ func runContainerStatus(cmd *cobra.Command, _ []string) error {
 }
 
 func runContainerStatusWithExec(ex execer, dir string) error {
-	if dir == "" {
-		d, err := ctpaths.ContainerDir()
-		if err != nil {
-			return fmt.Errorf("cannot determine default directory: %w", err)
-		}
-		dir = d
+	res, err := resolveDir(dir, true)
+	if err != nil {
+		return err
 	}
+	dir = res.Path
 
 	runtime, composeArgs, _ := ctpaths.ComposeCmd()
 	composeArgs = append(composeArgs, "ps")
