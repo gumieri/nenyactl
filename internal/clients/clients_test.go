@@ -203,7 +203,11 @@ func TestMergeOpenCodeDropsEmptyLegacyProvider(t *testing.T) {
 	if _, ok := root["provider"]; ok {
 		t.Errorf("empty legacy provider object was left behind:\n%s", merged)
 	}
-	if _, ok := root["providers"].(map[string]any)["nenya"]; !ok {
+	providers, ok := root["providers"].(map[string]any)
+	if !ok {
+		t.Fatal("merged output has no providers object")
+	}
+	if _, ok := providers["nenya"]; !ok {
 		t.Error("V2 nenya provider not added")
 	}
 }

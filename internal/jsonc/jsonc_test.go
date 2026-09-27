@@ -57,11 +57,12 @@ func TestReadFile(t *testing.T) {
 
 func TestDeleteMember(t *testing.T) {
 	cases := []struct {
-		name   string
-		doc    string
-		key    string
-		gone   bool
-		remain []string
+		name         string
+		doc          string
+		key          string
+		gone         bool
+		remain       []string
+		wantContains string
 	}{
 		{
 			name:   "middle member",
@@ -92,11 +93,12 @@ func TestDeleteMember(t *testing.T) {
 			remain: []string{"a"},
 		},
 		{
-			name:   "trailing comma and comment",
-			doc:    "{\n  // keep\n  \"a\": 1,\n  \"b\": 2,\n}\n",
-			key:    "b",
-			gone:   true,
-			remain: []string{"a"},
+			name:         "trailing comma and comment",
+			doc:          "{\n  // keep\n  \"a\": 1,\n  \"b\": 2,\n}\n",
+			key:          "b",
+			gone:         true,
+			remain:       []string{"a"},
+			wantContains: "// keep",
 		},
 	}
 
@@ -120,8 +122,8 @@ func TestDeleteMember(t *testing.T) {
 			if _, err := hujson.Parse(v.Pack()); err != nil {
 				t.Errorf("packed output is not valid: %v", err)
 			}
-			if tc.name == "trailing comma and comment" && !strings.Contains(string(v.Pack()), "// keep") {
-				t.Errorf("comment was dropped: %s", v.Pack())
+			if tc.wantContains != "" && !strings.Contains(string(v.Pack()), tc.wantContains) {
+				t.Errorf("packed output missing %q: %s", tc.wantContains, v.Pack())
 			}
 		})
 	}
