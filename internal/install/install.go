@@ -1,6 +1,7 @@
 package install
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -190,13 +191,12 @@ func InstallWithHTTPAndRunner(ctx context.Context, cfg Config, hc HTTPDoer, runn
 		}
 
 		if doService && p.configDir != defaultUnitConfigDir {
-			fmt.Fprintf(os.Stderr, "Warning: config root is %s but the shipped unit expects %s.\n", p.configDir, defaultUnitConfigDir)
-			fmt.Fprintln(os.Stderr, "Regenerate the unit with 'nenya service-unit --config-dir "+p.configDir+"' once that command ships.")
+			fmt.Fprintf(os.Stderr, "Note: generating the service unit for config root %s (nenya service-unit).\n", p.configDir)
 		}
 
 		serviceReady := true
 		if doService {
-			if err := installServiceFilesTo(extractDir, p.unitDir); err != nil {
+			if err := installServiceUnits(ctx, runner, dest, extractDir, p); err != nil {
 				serviceReady = false
 				fmt.Fprintf(os.Stderr, "Warning: failed to install service files: %v\n", err)
 				fmt.Fprintln(os.Stderr, "You can run nenya directly from the command line.")
@@ -315,22 +315,97 @@ type extractFile struct {
 	dst string
 }
 
-// installServiceFilesTo copies the shipped unit files from the archive into
-// unitDir. Unit contents are NOT generated here: the shipped units are the
-// contract source until `nenya service-unit` ships (CONTRACT.md §7.1/§4.5).
-func installServiceFilesTo(extractDir, unitDir string) error {
-	switch runtime.GOOS {
-	case "linux":
-		return copyFromExtract(extractDir, []extractFile{
-			{"deploy/nenya.service", filepath.Join(unitDir, "nenya.service")},
-			{"deploy/nenya.socket", filepath.Join(unitDir, "nenya.socket")},
-		})
-	case "darwin":
-		return copyFromExtract(extractDir, []extractFile{
-			{"deploy/nenya.plist", filepath.Join(unitDir, "com.gumieri.nenya.plist")},
-		})
+// serviceUnitSpec is one unit to install: the archive member that carries it
+// (the fallback) and its destination name in the unit directory.
+type serviceUnitSpec struct {
+	init        string // nenya service-unit --init value
+	member      string // release-archive member (fallback source)
+	destination string // filename under the unit directory
+}
+
+// unitSpecs returns the units to install for the current platform.
+func unitSpecs() []serviceUnitSpec {
+	if runtime.GOOS == "darwin" {
+		return []serviceUnitSpec{
+			{init: "launchd", member: "deploy/nenya.plist", destination: "com.gumieri.nenya.plist"},
+		}
+	}
+	return []serviceUnitSpec{
+		{init: "systemd", member: "deploy/nenya.service", destination: "nenya.service"},
+		{init: "systemd", member: "deploy/nenya.socket", destination: "nenya.socket"},
+	}
+}
+
+// installServiceUnits installs the platform's service units. It generates them
+// with `nenya service-unit` (CONTRACT.md §4.5) so the units reference the
+// install's actual config root and credential file; it falls back to the
+// archive members only when that command is absent from the installed binary.
+func installServiceUnits(ctx context.Context, runner CommandRunner, execPath, extractDir string, p installPaths) error {
+	return installServiceUnitsTo(ctx, runner, execPath, extractDir, p.unitDir, p.configDir, p.secretsFile)
+}
+
+func installServiceUnitsTo(ctx context.Context, runner CommandRunner, execPath, extractDir, unitDir, configDir, secretsFile string) error {
+	specs := unitSpecs()
+	for _, spec := range specs {
+		content, ok := serviceUnitContent(ctx, runner, execPath, spec.init, configDir, secretsFile)
+		if !ok {
+			// Feature-detection failed: fall back to the archive member, which
+			// pins the default config root. Non-default roots were already
+			// surfaced as a note above.
+			if err := copyFromExtract(extractDir, []extractFile{{spec.member, filepath.Join(unitDir, spec.destination)}}); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := writeUnitFile(filepath.Join(unitDir, spec.destination), content); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// serviceUnitContent asks nenya to generate a unit for the given init system and
+// paths. ok is false when `nenya service-unit` is unavailable or produced no
+// output, so callers can fall back.
+func serviceUnitContent(ctx context.Context, runner CommandRunner, execPath, init, configDir, secretsFile string) ([]byte, bool) {
+	args := []string{"service-unit", "--init", init}
+	if execPath != "" {
+		args = append(args, "--exec-path", execPath)
+	}
+	if configDir != "" {
+		args = append(args, "--config-dir", configDir)
+	}
+	if secretsFile != "" {
+		args = append(args, "--secrets-file", secretsFile)
+	}
+	out, err := probeOutput(ctx, runner, execPath, args...)
+	if err != nil || len(bytes.TrimSpace(out)) == 0 {
+		return nil, false
+	}
+	return out, true
+}
+
+// writeUnitFile writes a generated unit to unitDir with mode 0644.
+func writeUnitFile(path string, content []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create directory %s: %w", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	fmt.Printf("Installed %s\n", path)
+	return nil
+}
+
+// installServiceFilesTo copies the shipped unit files from the archive into
+// unitDir. It is the documented fallback used when `nenya service-unit` is not
+// available; prefer installServiceUnits.
+func installServiceFilesTo(extractDir, unitDir string) error {
+	var files []extractFile
+	for _, spec := range unitSpecs() {
+		files = append(files, extractFile{spec.member, filepath.Join(unitDir, spec.destination)})
+	}
+	return copyFromExtract(extractDir, files)
 }
 
 func copyFromExtract(extractDir string, files []extractFile) error {

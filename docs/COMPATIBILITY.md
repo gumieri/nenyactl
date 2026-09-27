@@ -26,7 +26,7 @@ A binary that exposes neither surface (pre-contract releases) passes the check.
 
 | nenyactl | Supported nenya `contract_version` | Notes |
 |----------|------------------------------------|-------|
-| unreleased (pre-1.0) | 1 | Initial contract. Archive layout, `/healthz`, secrets source order, and `version --json` are stable; `paths`/`describe`/`example-config`/`service-unit`/`config set`/`secret set` are `target` and feature-detected. |
+| unreleased (pre-1.0) | 1 | Initial contract. Archive layout, `/healthz`, secrets source order, `version --json`, `example-config`, and `service-unit` are stable; `paths`/`describe`/`config set`/`secret set` are `target` and feature-detected. |
 
 This matrix grows one row per nenyactl release. Because contract additions
 (new fields, new commands) do not bump `contract_version`, a nenyactl build can
@@ -45,7 +45,7 @@ checks the exit status; until it ships, nenyactl uses a documented fallback:
 | `paths --json` | target | platform defaults (`/etc/nenya`, `~/.local/share/nenyactl/nenya`) |
 | `describe --json` | target | contract check falls back to `version --json`; `config edit` requires `describe` and fails with an actionable error otherwise |
 | `example-config` | target | a minimal, documented bootstrap config |
-| `service-unit` | target | the unit shipped in the release archive (`deploy/`) |
+| `service-unit` | stable | the unit shipped in the release archive (`deploy/`) — used only when `service-unit` is absent |
 | `config set` / `secret set` | target | none — nenyactl no longer edits config or secrets files directly; the command fails until the contract ships |
 
 Fallbacks are marked in code and are removed as the contract commands ship.
