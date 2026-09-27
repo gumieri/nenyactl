@@ -59,11 +59,10 @@ func TestSetup(t *testing.T) {
 		}
 	})
 
-	t.Run("creates compose.yml with ListenAddr", func(t *testing.T) {
+	t.Run("creates compose.yml with normalized port mapping", func(t *testing.T) {
 		tmp := t.TempDir()
-		listenAddr := ":9090"
 		cfg := SetupConfig{
-			ListenAddr: listenAddr,
+			ListenAddr: ":9090",
 			Dir:        tmp,
 		}
 
@@ -78,8 +77,11 @@ func TestSetup(t *testing.T) {
 		}
 
 		composeStr := string(data)
-		if !strings.Contains(composeStr, listenAddr) {
-			t.Errorf("compose.yml does not contain ListenAddr %s", listenAddr)
+		if !strings.Contains(composeStr, "9090:8080") {
+			t.Errorf("compose.yml does not contain normalized mapping 9090:8080:\n%s", composeStr)
+		}
+		if strings.Contains(composeStr, ":9090:8080") {
+			t.Errorf("compose.yml contains invalid mapping :9090:8080:\n%s", composeStr)
 		}
 		if !strings.Contains(composeStr, "ghcr.io/gumieri/nenya:latest") {
 			t.Error("compose.yml does not contain correct image")

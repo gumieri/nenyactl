@@ -5,7 +5,7 @@ const ComposeYAML = `services:
     image: ${NENYA_IMAGE:-ghcr.io/gumieri/nenya:latest}
     container_name: nenya
     ports:
-      - "{{ .ListenAddr }}:8080"
+      - "{{ .HostPort }}"
     volumes:
       - ./config:/etc/nenya:ro
       - ./secrets:/run/secrets/nenya:ro

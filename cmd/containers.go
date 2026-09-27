@@ -1,13 +1,13 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/gumieri/nenyactl/internal/containers"
 	ctpaths "github.com/gumieri/nenyactl/internal/paths"
@@ -277,8 +277,10 @@ func runContainerStatusWithExec(ex execer, dir string) error {
 	}
 
 	fmt.Println()
-	fmt.Println(infoStyle.Render("›"), "Health check:")
-	resp, err := http.Get("http://localhost:8080/healthz")
+	port := containers.PublishedPort(dir)
+	fmt.Println(infoStyle.Render("›"), "Health check (localhost:"+port+"):")
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get("http://localhost:" + port + "/healthz")
 	if err != nil {
 		fmt.Println(errorStyle.Render("✗"), "Connection failed:", err)
 		return nil
@@ -290,17 +292,10 @@ func runContainerStatusWithExec(ex execer, dir string) error {
 		fmt.Println(errorStyle.Render("✗"), "Status:", resp.Status)
 	}
 
-	clientPath := filepath.Join(dir, "secrets", "01-client.json")
-	data, err := os.ReadFile(clientPath)
-	if err == nil {
-		var secret struct {
-			ClientToken string `json:"client_token"`
-		}
-		if json.Unmarshal(data, &secret) == nil && secret.ClientToken != "" {
-			fmt.Println()
-			fmt.Println(dimStyle.Render("  Client token:"))
-			fmt.Println(successStyle.Render("  Authorization: Bearer ") + secret.ClientToken)
-		}
+	if token := containers.ClientToken(dir); token != "" {
+		fmt.Println()
+		fmt.Println(dimStyle.Render("  Client token:"))
+		fmt.Println(successStyle.Render("  Authorization: Bearer ") + token)
 	}
 
 	return nil

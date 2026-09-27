@@ -1,8 +1,11 @@
 package containers
 
 import (
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 )
@@ -82,9 +85,46 @@ type SetupConfig struct {
 	Dir        string
 }
 
+// HostPortMapping converts a listen address into a compose port mapping of the
+// form "[host:]published:8080". The container always listens on 8080, so
+// `:8080` becomes `8080:8080` and `127.0.0.1:9090` becomes
+// `127.0.0.1:9090:8080` rather than the invalid `:8080:8080`.
+func HostPortMapping(listen string) (string, error) {
+	listen = strings.TrimSpace(listen)
+	if listen == "" {
+		return DefaultPort + ":" + DefaultPort, nil
+	}
+	if _, err := strconv.Atoi(listen); err == nil {
+		return listen + ":" + DefaultPort, nil
+	}
+
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return "", fmt.Errorf("invalid listen address %q: %w", listen, err)
+	}
+	if port == "" {
+		return "", fmt.Errorf("invalid listen address %q: missing port", listen)
+	}
+
+	host = strings.Trim(host, "[]")
+	switch {
+	case host == "" || host == "0.0.0.0" || host == "::":
+		return port + ":" + DefaultPort, nil
+	case strings.Contains(host, ":"):
+		return "[" + host + "]:" + port + ":" + DefaultPort, nil
+	default:
+		return host + ":" + port + ":" + DefaultPort, nil
+	}
+}
+
 func Setup(cfg SetupConfig) error {
 	configDir := filepath.Join(cfg.Dir, "config")
 	secretsDir := filepath.Join(cfg.Dir, "secrets")
+
+	hostPort, err := HostPortMapping(cfg.ListenAddr)
+	if err != nil {
+		return err
+	}
 
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		return err
@@ -104,7 +144,7 @@ func Setup(cfg SetupConfig) error {
 	if err != nil {
 		return err
 	}
-	data := struct{ ListenAddr string }{cfg.ListenAddr}
+	data := struct{ HostPort string }{hostPort}
 	var sb strings.Builder
 	if err := tmpl.Execute(&sb, data); err != nil {
 		return err
