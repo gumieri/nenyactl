@@ -245,7 +245,10 @@ func runContainerRestartWithExec(ex execer, dir string) error {
 	}
 	dir = res.Path
 
-	runtime, composeArgs, _ := ctpaths.ComposeCmd()
+	runtime, composeArgs, err := ctpaths.ComposeCmd()
+	if err != nil {
+		return err
+	}
 	composeArgs = append(composeArgs, "restart")
 
 	fmt.Printf("%s Running: %s compose %v\n", infoStyle.Render("›"), runtime, composeArgs)

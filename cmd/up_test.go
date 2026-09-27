@@ -158,6 +158,54 @@ func TestUpDeploymentReloadsAfterSavingKeys(t *testing.T) {
 	}
 }
 
+func TestUpDeploymentRestartsContainersAfterSavingKeys(t *testing.T) {
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "config", "config.json"), []byte(`{"server":{"listen_addr":":18082"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := resolveDir(base, dirAttach, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Kind != dirContainerRoot {
+		t.Fatalf("expected a container root, got %+v", res)
+	}
+
+	rr := newRecordingRunner()
+	rr.out = []byte(`{"contract_version":1,"config":{"server":{"listen_addr":":18082"}},"providers":{"configured":[]}}`)
+	fakeContract(t, rr)
+
+	savedKeys := upCollectKeys
+	upCollectKeys = func() (map[string]string, error) { return map[string]string{"openai": "sk-x"}, nil }
+	t.Cleanup(func() { upCollectKeys = savedKeys })
+
+	restarted := false
+	savedRestart := upContainerRestart
+	upContainerRestart = func(dir string) error { restarted = true; return nil }
+	t.Cleanup(func() { upContainerRestart = savedRestart })
+
+	reloaded := false
+	savedReload := upServiceReload
+	upServiceReload = func() error { reloaded = true; return nil }
+	t.Cleanup(func() { upServiceReload = savedReload })
+
+	if err := upDeployment(context.Background(), res, fakeDoer{status: http.StatusOK}, time.Second); err != nil {
+		t.Fatalf("upDeployment: %v", err)
+	}
+	if !restarted {
+		t.Error("expected containers to restart after saving provider keys")
+	}
+	if reloaded {
+		t.Error("a container deployment must not reload the host service")
+	}
+}
+
 func TestEnsureDeploymentSkipsInstallWithDir(t *testing.T) {
 	// --dir is provided, so ensureDeployment must resolve it without installing.
 	base := t.TempDir()
