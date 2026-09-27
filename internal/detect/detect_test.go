@@ -330,6 +330,55 @@ func TestDetectFromDir(t *testing.T) {
 	})
 }
 
+func TestModeForDir(t *testing.T) {
+	t.Run("container layout with config/config.json", func(t *testing.T) {
+		tmp := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(tmp, "config"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(tmp, "config", "config.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := ModeForDir(tmp); got != ModeContainer {
+			t.Errorf("ModeForDir = %v, want container", got)
+		}
+		info, err := DetectFromDirAuto(tmp)
+		if err != nil {
+			t.Fatalf("DetectFromDirAuto: %v", err)
+		}
+		if info.ConfigFile != filepath.Join(tmp, "config", "config.json") {
+			t.Errorf("ConfigFile = %s", info.ConfigFile)
+		}
+	})
+
+	t.Run("container layout with compose.yml", func(t *testing.T) {
+		tmp := t.TempDir()
+		if err := os.WriteFile(filepath.Join(tmp, "compose.yml"), []byte("services: {}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := ModeForDir(tmp); got != ModeContainer {
+			t.Errorf("ModeForDir = %v, want container", got)
+		}
+	})
+
+	t.Run("bare-metal layout with config.json at root", func(t *testing.T) {
+		tmp := t.TempDir()
+		if err := os.WriteFile(filepath.Join(tmp, "config.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := ModeForDir(tmp); got != ModeBareMetal {
+			t.Errorf("ModeForDir = %v, want bare-metal", got)
+		}
+		info, err := DetectFromDirAuto(tmp)
+		if err != nil {
+			t.Fatalf("DetectFromDirAuto: %v", err)
+		}
+		if info.ConfigFile != filepath.Join(tmp, "config.json") {
+			t.Errorf("ConfigFile = %s", info.ConfigFile)
+		}
+	})
+}
+
 func TestErrorTypes(t *testing.T) {
 	t.Run("AmbiguousError message contains both paths", func(t *testing.T) {
 		e := &AmbiguousError{BinPath: "/usr/local/bin/nenya", ContainerDir: "/home/user/.local/share/nenyactl/nenya"}

@@ -185,6 +185,25 @@ func DetectFromDir(dir string, mode Mode) (*Info, error) {
 	}
 }
 
+// ModeForDir infers the installation mode from the layout inside dir. A
+// container deployment has config/config.json (and/or compose.yml); anything
+// else is treated as bare-metal. This is what lets `agents --dir` resolve the
+// right config path without the caller knowing the layout.
+func ModeForDir(dir string) Mode {
+	if _, err := os.Stat(filepath.Join(dir, "config", "config.json")); err == nil {
+		return ModeContainer
+	}
+	if _, err := os.Stat(filepath.Join(dir, "compose.yml")); err == nil {
+		return ModeContainer
+	}
+	return ModeBareMetal
+}
+
+// DetectFromDirAuto resolves dir's mode automatically.
+func DetectFromDirAuto(dir string) (*Info, error) {
+	return DetectFromDir(dir, ModeForDir(dir))
+}
+
 func knownBinPaths() []string {
 	ps := []string{filepath.Join(paths.SystemBinDir(), "nenya")}
 	if userBin, err := paths.UserBinDir(); err == nil {
@@ -220,7 +239,7 @@ type PermissionError struct {
 
 func (e *PermissionError) Error() string {
 	if e.IsContainer {
-		return fmt.Sprintf("config not readable: %s\n\n  Run with: sudo nenyactl agents --dir %s", e.Path, e.DataDir)
+		return fmt.Sprintf("config not readable: %s\n\n  This is a container deployment under %s. Check the file permissions and ownership for your user account (no sudo needed for a user-owned deployment).", e.Path, e.DataDir)
 	}
 	return fmt.Sprintf("config not readable: %s\n\n  Run with: sudo nenyactl agents", e.Path)
 }

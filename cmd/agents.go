@@ -25,9 +25,13 @@ func init() {
 	rootCmd.AddCommand(agentsCmd)
 	agentsCmd.RunE = runAgents
 	agentsCmd.Flags().StringVar(&agentsDir, "dir", "", "Configuration directory (skips auto-detection)")
+	agentsCmd.Flags().StringVar(&agentsMode, "mode", "", "Deployment mode for --dir: bare-metal or container (default: auto-detect)")
 }
 
-var agentsDir string
+var (
+	agentsDir  string
+	agentsMode string
+)
 
 func runAgents(cmd *cobra.Command, args []string) error {
 	var info *detect.Info
@@ -37,7 +41,11 @@ func runAgents(cmd *cobra.Command, args []string) error {
 		if _, statErr := os.Stat(agentsDir); statErr != nil {
 			return fmt.Errorf("--dir: %w", statErr)
 		}
-		info, err = detect.DetectFromDir(agentsDir, detect.ModeBareMetal)
+		mode, modeErr := resolveAgentsMode(agentsDir)
+		if modeErr != nil {
+			return modeErr
+		}
+		info, err = detect.DetectFromDir(agentsDir, mode)
 		if err != nil {
 			return err
 		}
@@ -76,4 +84,19 @@ func runAgents(cmd *cobra.Command, args []string) error {
 	fmt.Println(successStyle.Render("✓"), "Auto-agents disabled")
 
 	return nil
+}
+
+// resolveAgentsMode returns the mode to use for --dir: an explicit --mode value
+// wins, otherwise the mode is inferred from the layout inside dir.
+func resolveAgentsMode(dir string) (detect.Mode, error) {
+	switch agentsMode {
+	case "":
+		return detect.ModeForDir(dir), nil
+	case "bare-metal":
+		return detect.ModeBareMetal, nil
+	case "container":
+		return detect.ModeContainer, nil
+	default:
+		return detect.ModeNone, fmt.Errorf("--mode: invalid value %q (use bare-metal or container)", agentsMode)
+	}
 }
