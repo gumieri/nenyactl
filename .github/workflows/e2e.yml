@@ -1,0 +1,45 @@
+name: Seam E2E
+
+# Nightly and on-demand golden-path E2E against the real latest nenya release.
+# This is the drift detector between the two repos: it downloads the real
+# release, verifies its checksum, extracts the real archive (asserting the
+# CONTRACT §7.1 member set), then starts the binary and drives the golden path
+# (health -> authenticated request -> streamed chat completion -> SIGTERM).
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'nenya release tag to test (default: latest)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  seam-e2e:
+    name: Seam E2E (real release)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build nenyactl
+        run: go build -o bin/nenyactl ./cmd/nenyactl/
+
+      - name: Golden-path E2E against the real nenya release
+        env:
+          NENYACTL_E2E: "1"
+          NENYA_E2E_VERSION: ${{ inputs.version }}
+        run: go test -v ./test/e2e/... -count=1 -timeout 15m

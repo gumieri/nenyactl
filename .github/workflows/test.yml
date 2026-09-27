@@ -100,10 +100,8 @@ jobs:
         run: go test -v ./test/integration/...
 
   e2e:
-    name: E2E Tests
+    name: E2E (real latest nenya release)
     runs-on: ubuntu-latest
-    env:
-      NENYACTL_RUNTIME: docker
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -120,42 +118,8 @@ jobs:
       - name: Build nenyactl
         run: go build -o bin/nenyactl ./cmd/nenyactl/
 
-      - name: Verify Docker is available
-        run: |
-          docker info --format 'Docker {{.ServerVersion}} ready'
-          docker compose version
-
-      - name: Run full workflow
+      - name: Golden-path E2E against the real latest nenya release
         env:
-          NENYACTL_DATA_DIR: ${{ runner.temp }}/nenyactl
-        run: |
-          set -eo pipefail
-          echo "::group::Setup"
-          mkdir -p $NENYACTL_DATA_DIR
-          echo "::endgroup::"
+          NENYACTL_E2E: "1"
+        run: go test -v ./test/e2e/... -count=1 -timeout 15m
 
-          echo "::group::Container Setup"
-          ./bin/nenyactl containers setup --dir $NENYACTL_DATA_DIR
-          cat $NENYACTL_DATA_DIR/compose.yml
-          echo "::endgroup::"
-
-          echo "::group::Container Start"
-          ./bin/nenyactl containers start --dir $NENYACTL_DATA_DIR
-          echo "::endgroup::"
-
-          echo "::group::Health Check"
-          timeout 90 sh -c 'until curl -fsS http://localhost:8080/healthz; do sleep 1; done'
-          echo "::endgroup::"
-
-          echo "::group::Container Status"
-          ./bin/nenyactl containers status --dir $NENYACTL_DATA_DIR
-          echo "::endgroup::"
-
-          echo "::group::Container Stop"
-          ./bin/nenyactl containers stop --dir $NENYACTL_DATA_DIR
-          echo "::endgroup::"
-
-      - name: Cleanup on failure
-        if: failure()
-        run: |
-          docker compose -f ${{ runner.temp }}/nenyactl/compose.yml down 2>/dev/null || true
