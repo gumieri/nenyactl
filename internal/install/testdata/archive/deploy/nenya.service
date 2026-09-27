@@ -1,0 +1,71 @@
+# Nenya AI Gateway - systemd service unit
+#
+# Install:
+#   curl -fsSL https://raw.githubusercontent.com/gumieri/nenya/main/install.sh | sudo sh
+#   See: https://github.com/gumieri/nenya#quick-start
+#
+# Install paths:
+#   Binary:    /usr/bin/nenya
+#   Config:    /etc/nenya/  (directory, loaded and deep-merged)
+#   Secrets:   /etc/nenya/secrets.json  (single file, loaded via systemd credential)
+#               /etc/nenya/secrets.d/*.json  (directory, multiple files merged)
+#   Config ref: /etc/nenya/config.json.example (installed on first install if no config exists)
+#
+# Hot reload:
+#   systemctl reload nenya
+
+[Unit]
+Description=Nenya AI Gateway & Bouncer
+Requires=nenya.socket
+After=nenya.socket
+
+[Service]
+Type=simple
+DynamicUser=yes
+ExecStart=/usr/bin/nenya
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+
+# Capability and privilege restrictions
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+
+# Filesystem and process isolation
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RemoveIPC=yes
+UMask=0077
+
+# Network restrictions
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Memory protection
+MemoryDenyWriteExecute=yes
+
+# Allow mlock for secure memory (tokens stored in locked RAM)
+LimitMEMLOCK=infinity
+
+# Disable core dumps to prevent locked memory from reaching disk
+LimitCORE=0
+
+# Syscall filtering (seccomp)
+SystemCallFilter=@system-service
+SystemCallFilter=~@mount @privileged @raw-io @reboot @swap
+
+# Secrets loaded via systemd credential
+LoadCredential=secrets:/etc/nenya/secrets.json
+
+[Install]
+WantedBy=multi-user.target

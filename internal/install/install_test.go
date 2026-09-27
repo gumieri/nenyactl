@@ -167,28 +167,28 @@ func TestCopyFromExtract(t *testing.T) {
 		extractDir := t.TempDir()
 		dstBase := t.TempDir()
 
-		srcFile := filepath.Join(extractDir, "deploy/test.txt")
+		srcFile := filepath.Join(extractDir, "deploy/nenya.service")
 		if err := os.MkdirAll(filepath.Dir(srcFile), 0o755); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
-		if err := os.WriteFile(srcFile, []byte("content"), 0o644); err != nil {
+		if err := os.WriteFile(srcFile, []byte("[Unit]\nDescription=nenya"), 0o644); err != nil {
 			t.Fatalf("write: %v", err)
 		}
 
 		paths := []extractFile{
-			{"deploy/test.txt", filepath.Join(dstBase, "output.txt")},
+			{"deploy/nenya.service", filepath.Join(dstBase, "nenya.service")},
 		}
 
 		if err := copyFromExtract(extractDir, paths); err != nil {
 			t.Fatalf("copyFromExtract() error = %v", err)
 		}
 
-		data, err := os.ReadFile(filepath.Join(dstBase, "output.txt"))
+		data, err := os.ReadFile(filepath.Join(dstBase, "nenya.service"))
 		if err != nil {
 			t.Fatalf("read output: %v", err)
 		}
-		if string(data) != "content" {
-			t.Errorf("output content = %q, want %q", string(data), "content")
+		if string(data) != "[Unit]\nDescription=nenya" {
+			t.Errorf("output content = %q, want %q", string(data), "[Unit]\nDescription=nenya")
 		}
 	})
 
@@ -197,7 +197,7 @@ func TestCopyFromExtract(t *testing.T) {
 		dstBase := t.TempDir()
 
 		paths := []extractFile{
-			{"deploy/missing.txt", filepath.Join(dstBase, "output.txt")},
+			{"deploy/nenya.service", filepath.Join(dstBase, "output.service")},
 		}
 
 		err := copyFromExtract(extractDir, paths)

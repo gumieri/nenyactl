@@ -1,0 +1,25 @@
+{
+  "description": "Real goreleaser archive layout, captured from the nenya v0.15.0 release. No config example is shipped.",
+  "source": "nenya_0.15.0_linux_arm64.tar.gz",
+  "release": "v0.15.0",
+  "captured_at": "2026-09-26",
+  "capture_method": "curl the release asset, then tar -tzvf; unit files copied verbatim into testdata/archive/deploy/",
+  "linux": {
+    "archive": "nenya_<version>_linux_<arch>.tar.gz",
+    "members": [
+      "deploy/nenya.service",
+      "deploy/nenya.socket",
+      "nenya"
+    ]
+  },
+  "darwin": {
+    "archive": "nenya_<version>_darwin_<arch>.tar.gz",
+    "members": [
+      "deploy/nenya.plist",
+      "nenya"
+    ]
+  },
+  "checksums_sha256": {
+    "nenya_0.15.0_linux_arm64.tar.gz": "2fd7c6b95bcdfe023306db06841d5b5ccdee7d0874551b69015cc9799072c05a"
+  }
+}
