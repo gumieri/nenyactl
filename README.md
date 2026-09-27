@@ -1,192 +1,159 @@
-<img alt="nenyactl" src="https://github.com/user-attachments/assets/8804ae29-2c58-4ebf-978c-e8effeb12762" />
-
 # nenyactl
 
-![go-version] ![License][license] ![CI][ci] ![CodeQL][codeql] ![Release][release] ![Sponsor][sponsor]
+Command-line tool to install and manage the Nenya AI Gateway.
 
-Command-line tool to install and manage Nenya AI Gateway.
+## What it does
 
-## Features
+- Install the `nenya` binary (verified: SHA-256 + cosign) and run it as a
+  systemd/launchd service, bootstrapping config and secrets.
+- Or scaffold a container deployment (Podman or Docker, auto-detected).
+- Interactive TUI for agents, provider API keys, and config editing.
+- Cross-platform path resolution (XDG on Linux, Library folders on macOS,
+  AppData on Windows).
 
-- Interactive TUI for setting provider API keys
-- Automatic configuration and secrets generation
-- Supports both Podman and Docker (auto-detected)
-- Cross-platform path resolution (XDG on Linux, Library folders on macOS, AppData on Windows)
-- Bare metal install on Linux and macOS with package manager or binary from GitHub.
-- Or Container-based deployment for all platforms (Linux, macOS, Windows)
+nenyactl is a separate, deliberately non-zero-dependency client. Nenya owns the
+mechanism (config schema, merge precedence, paths, release layout); nenyactl
+owns the invocation and experience, consuming nenya's contract.
 
 ## Installation
 
-### mise (all platforms)
+> **Status: pre-release.** nenyactl has no published release yet, so there are
+> no tarballs and no package-manager channels. The commands below are the ones
+> that will work once the first release ships; until then, build from source.
+
+### From Source (works today)
 
 ```bash
-# Install globally (no repo clone needed)
-mise use -g go:github.com/gumieri/nenyactl/cmd/nenyactl
+git clone https://github.com/gumieri/nenyactl
+cd nenyactl
+go build -o nenyactl ./cmd/nenyactl/
+install -m 755 nenyactl /usr/local/bin/   # or ~/.local/bin
 ```
 
-### Arch Linux (AUR)
+### Binary tarball (Linux / macOS) — after first release
 
 ```bash
-yay -S nenyactl-bin
+# Linux amd64
+curl -fsSL https://github.com/gumieri/nenyactl/releases/latest/download/nenyactl_<version>_linux_amd64.tar.gz | tar -xz
+sudo install -m 755 nenyactl /usr/bin/
+
+# macOS arm64
+curl -fsSL https://github.com/gumieri/nenyactl/releases/latest/download/nenyactl_<version>_darwin_arm64.tar.gz | tar -xz
+sudo install -m 755 nenyactl /usr/bin/
 ```
 
-### Nix / NixOS
-
-```bash
-nix-env -iA gumieri.nenyactl
-```
-
-### Binary tarball (Linux / macOS)
-
-```bash
-# latest, Linux amd64
-curl -fsSL https://github.com/gumieri/nenyactl/releases/latest/download/nenyactl_linux_amd64.tar.gz | tar -xz
-sudo install -m 755 nenyactl /usr/local/bin/
-
-# latest, macOS (Apple Silicon)
-curl -fsSL https://github.com/gumieri/nenyactl/releases/latest/download/nenyactl_darwin_arm64.tar.gz | tar -xz
-sudo install -m 755 nenyactl /usr/local/bin/
-```
-
-### System packages (Linux)
-
-```bash
-# Debian / Ubuntu
-curl -fsSL https://github.com/gumieri/nenyactl/releases/latest/download/nenyactl_linux_amd64.deb -o nenyactl.deb
-sudo dpkg -i nenyactl.deb
-
-# Fedora / RHEL
-sudo dnf install https://github.com/gumieri/nenyactl/releases/latest/download/nenyactl_linux_amd64.rpm
-```
-
-### Homebrew (macOS / Linux)
+### Homebrew (macOS / Linux) — after first release
 
 ```bash
 brew install gumieri/tap/nenyactl
 ```
 
-### From Source
+### Arch Linux (AUR) — after first release
 
 ```bash
-go build -o nenyactl ./cmd/nenyactl/
-install -m 755 nenyactl /usr/local/bin/
+yay -S nenyactl-bin
+```
+
+### Nix / NixOS — after first release
+
+```bash
+nix-env -iA gumieri.nenyactl
+```
+
+### System packages (Linux) — after first release
+
+```bash
+# Debian / Ubuntu
+sudo dpkg -i nenyactl_<version>_linux_amd64.deb
+
+# Fedora / RHEL
+sudo dnf install nenyactl_<version>_linux_amd64.rpm
 ```
 
 ## Quick Start
 
 ```bash
-# Install Nenya binary and configure as a service
+# Bare metal (Linux/macOS): download, verify, install the service,
+# bootstrap config + secrets (secrets.json is created mode 0600).
 sudo nenyactl install
 
-# Enable and start the service
-nenyactl service start
-
-# Or use containers instead (all platforms, or Windows-only)
-nenyactl containers setup --start
-
-# Check status
+# Check status (health is /healthz)
 nenyactl service status
+
+# Or use containers instead (all platforms, including Windows)
+nenyactl containers setup --start
 ```
 
-The `install` command:
-- Install the package with your System Package Manager
-- Or Downloads the latest Nenya binary from GitHub releases
-  - Installs it to `/usr/local/bin/nenya`
-  - **Linux**: Creates systemd units (`nenya.service` + `nenya.socket`) in `/etc/systemd/system/`
-  - **macOS**: Creates a launchd plist in `/Library/LaunchDaemons/com.gumieri.nenya.plist`
-  - **Windows**: Not supported — use `nenyactl containers setup` instead
+`nenyactl install`:
+
+- resolves the latest nenya release (or a specific version),
+- downloads `checksums.txt` and its cosign bundle, verifies the signature and
+  the archive SHA-256 **before** installing anything (use `--skip-verify` only
+  for air-gapped workflows),
+- installs the binary to `/usr/bin/nenya`,
+- creates `<config-root>/config.json` and `<config-root>/secrets.json`
+  (with a generated client token, never overwriting existing files),
+- installs the shipped systemd units (`nenya.service` + `nenya.socket`) and
+  runs `systemctl daemon-reload` + `enable --now nenya.socket`,
+- macOS: installs the launchd plist and loads it.
+
+Flags:
+
+| Flag | Effect |
+|------|--------|
+| `--user` | Install the binary to `~/.local/bin` and bootstrap user config; no system service, no system writes. |
+| `--skip-service` | Install the binary only; no config, secrets, or service. |
+| `--skip-verify` | Skip cosign signature verification (SHA-256 is still enforced). Not recommended. |
 
 ## Usage
 
 ### Service Management (Linux / macOS)
 
 ```bash
-# Start the service
 nenyactl service start
-
-# Stop the service
 nenyactl service stop
-
-# Check status
 nenyactl service status
-
-# Reload configuration (SIGHUP)
-nenyactl service reload
+nenyactl service reload   # SIGHUP; preferred over restart for config changes
 ```
 
-### Binary Installation
+### Container Management (all platforms)
 
 ```bash
-# Install latest version with service configuration (requires sudo)
-sudo nenyactl install
-
-# Install specific version
-sudo nenyactl install v0.1.0
-
-# Install binary only, skip service setup
-sudo nenyactl install --skip-service
-
-# Install to user bin dir (no service setup)
-nenyactl install --user --skip-service
-```
-
-### Container Management (all platforms, opt-in on Linux/macOS)
-
-```bash
-# Create a new deployment (interactive API key setup)
-nenyactl containers setup
-
-# Create in custom directory
+nenyactl containers setup            # scaffold config/, secrets/, compose.yml, .env
 nenyactl containers setup --dir ./my-nenya
-
-# Create and auto-start
 nenyactl containers setup --start
-
-# Start containers
 nenyactl containers start
-
-# Stop containers
 nenyactl containers stop
-
-# Show status and health check
-nenyactl containers status
+nenyactl containers status           # reads the published port and client token from the deployment
 ```
 
-### Configuration Management
+The container listens on 8080 internally; `--listen 9090` publishes `9090:8080`.
+
+### Configuration and Secrets
 
 ```bash
-# Initialize system config
-sudo nenyactl config init
-
-# Initialize in custom directory
+# Create the config file (bare metal defaults to /etc/nenya, or --dir)
 nenyactl config init --dir /path/to/config
-```
 
-### Agent Management
+# Edit config (and agents) via TUI; auto-detects bare-metal vs container
+nenyactl config edit
 
-```bash
-# Configure agents via interactive TUI
+# Agents: auto-generated or custom
 nenyactl agents
+nenyactl agents --dir ~/.local/share/nenyactl/nenya   # mode auto-detected; or --mode container
 
-# Switch between auto-agents (true/false)
-# Edit agents: add, update, delete, reorder
-# Select models per agent from provider registry
-```
-
-### Secret Management
-
-```bash
-# Bootstrap secrets with generated client token
-sudo nenyactl secret bootstrap
-
-# Generate a client token
+# Secrets
+nenyactl secret bootstrap --dir /path/to/config
 nenyactl secret generate --type client
-
-# Generate an API key
 nenyactl secret generate --type apikey --name my-app
 ```
 
-### Check Version
+> **Config layout caveat.** Nenya reads `<config-root>/config.json` *or*
+> `<config-root>/config.d/*.json` — creating any `config.d/*.json` makes it
+> ignore `config.json` entirely. Prefer editing the single file the detected
+> layout uses.
+
+### Version
 
 ```bash
 nenyactl version
@@ -196,39 +163,41 @@ nenyactl version
 
 | Command | Description |
 |---------|-------------|
-| `install [version]` | Install Nenya binary and service (systemd/launchd) |
-| `install --skip-service` | Install binary only, no service |
-| `service start/stop/status/reload` | Manage the Nenya service |
-| `agents` | Configure agents via interactive TUI |
-| `containers setup` | Create a new container deployment with TUI for API keys |
-| `containers start` | Start Nenya containers |
-| `containers stop` | Stop Nenya containers |
-| `containers status` | Show container status and health check |
-| `config init` | Create initial configuration |
-| `secret bootstrap` | Create secrets.json with generated tokens |
+| `install [version]` | Download (verified), install, bootstrap config/secrets, enable the service |
+| `install --user` | User binary + user config; no system writes |
+| `install --skip-service` | Binary only |
+| `service start/stop/status/reload` | Manage the nenya service |
+| `agents [--dir] [--mode]` | Configure agents via TUI |
+| `containers setup/start/stop/status` | Container deployment |
+| `config init` | Create the initial configuration |
+| `config edit` | Interactive config editor |
+| `secret bootstrap` | Create secret files with a generated client token |
 | `secret generate` | Generate client tokens or API keys |
 | `version` | Show version information |
 
 ## Configuration
 
-Nenya reads configuration from `/etc/nenya/` (directory mode) or a single JSON file.
+Nenya reads configuration from `/etc/nenya/` (directory mode) or a single JSON
+file. Default paths:
 
-Default paths:
-- **Config**: `/etc/nenya/config.json`
-- **Secrets**: `/etc/nenya/secrets.json`
+- **Config**: `/etc/nenya/config.json` (or `/etc/nenya/config.d/`)
+- **Secrets**: `/etc/nenya/secrets.json` (mode 0600)
 - **Linux service**: systemd — `nenya.service` + `nenya.socket`
 - **macOS service**: launchd — `com.gumieri.nenya.plist` in `/Library/LaunchDaemons/`
 
 Container data location (if using containers):
+
 - **Linux**: `~/.local/share/nenyactl/nenya`
 - **macOS**: `~/Library/Application Support/nenyactl/nenya`
 - **Windows**: `%LOCALAPPDATA%\nenyactl\nenya`
 
-See [Nenya documentation](https://github.com/gumieri/nenya) for full configuration reference.
+See the [Nenya documentation](https://github.com/gumieri/nenya) for the full
+configuration reference.
 
 ## Secrets
 
-Secrets are stored in `secrets/01-client.json` (client token) and `secrets/02-providers.json` (provider keys) with mode 0600.
+Container deployments store secrets in `secrets/*.json` (merged in name order);
+bare metal uses a single `secrets.json`. Files are mode 0600.
 
 Format:
 
@@ -242,51 +211,45 @@ Format:
 }
 ```
 
-Use the generated client token to authenticate requests:
+Nenya's secrets source order (first match wins): `$CREDENTIALS_DIRECTORY/secrets`,
+`$CREDENTIALS_DIRECTORY/secrets.d/*.json`, `$NENYA_SECRETS_DIR/*.json`,
+`/run/secrets/nenya/*.json`.
+
+Authenticate requests with the client token:
 
 ```bash
-curl -H "Authorization: Bearer $(jq -r '.client_token' secrets/01-client.json)" \
+curl -H "Authorization: Bearer $(jq -r '.client_token' /etc/nenya/secrets.json)" \
   -d '{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"Hello!"}]}' \
   http://localhost:8080/v1/chat/completions
 ```
 
+Health is `GET /healthz` (unauthenticated). `/v1/*` requires the bearer token.
+
 ## Development
-
-With mise (requires cloning the repo):
-
-```bash
-# Build
-mise run build
-
-# Test
-mise run test
-
-# Lint
-mise run lint
-
-# Install locally
-mise run install
-```
-
-Or directly with Go:
 
 ```bash
 # Build
 go build -o bin/nenyactl ./cmd/nenyactl/
 
-# Test
-go test ./...
+# Test (unit + integration)
+go test ./... -count=1
+
+# Full verification line
+gofmt -l . && go vet ./... && golangci-lint run ./... && go mod tidy && git diff --exit-code go.mod go.sum
 
 # Lint
 golangci-lint run ./...
 
-# Install
+# Install locally
 install -m 755 bin/nenyactl /usr/local/bin/
 ```
 
-[go-version]: https://img.shields.io/badge/Go-1.26-00ADD8?logo=golang&logoColor=white
-[license]: https://img.shields.io/badge/License-Apache_2.0-5B44C2?logo=apache&logoColor=white
-[ci]: https://img.shields.io/github/actions/workflow/status/gumieri/nenyactl/test.yml?branch=main&logo=github&logoColor=white&label=CI
-[codeql]: https://img.shields.io/github/actions/workflow/status/gumieri/nenyactl/codeql.yml?branch=main&logo=github&logoColor=white&label=CodeQL
-[release]: https://img.shields.io/github/v/release/gumieri/nenyactl?logo=github&logoColor=white&sort=semver
-[sponsor]: https://img.shields.io/badge/Sponsor-gumieri-ff69b4?logo=github&logoColor=white
+### Seam E2E (real nenya release)
+
+```bash
+NENYACTL_E2E=1 go test ./test/e2e/... -count=1 -timeout 15m
+```
+
+Downloads the latest nenya release, verifies its checksum, asserts the archive
+layout, then drives the golden path (health → authenticated request → streamed
+completion → clean shutdown). Runs nightly in CI and on demand.
