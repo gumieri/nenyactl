@@ -7,10 +7,10 @@ import (
 
 func TestCatalogFromDescribe(t *testing.T) {
 	t.Run("uses the provider catalog and sorts", func(t *testing.T) {
-		c := CatalogFromDescribe([][2]string{
-			{"gemini", "gemini-2.5-flash"},
-			{"anthropic", "claude-sonnet-4-5"},
-			{"anthropic", "claude-opus-4-7"},
+		c := CatalogFromDescribe([]CatalogModel{
+			{Provider: "gemini", Model: "gemini-2.5-flash"},
+			{Provider: "anthropic", Model: "claude-sonnet-4-5"},
+			{Provider: "anthropic", Model: "claude-opus-4-7"},
 		})
 
 		want := []CatalogModel{
@@ -29,9 +29,9 @@ func TestCatalogFromDescribe(t *testing.T) {
 	})
 
 	t.Run("de-duplicates entries", func(t *testing.T) {
-		c := CatalogFromDescribe([][2]string{
-			{"anthropic", "claude-sonnet-4-5"},
-			{"anthropic", "claude-sonnet-4-5"},
+		c := CatalogFromDescribe([]CatalogModel{
+			{Provider: "anthropic", Model: "claude-sonnet-4-5"},
+			{Provider: "anthropic", Model: "claude-sonnet-4-5"},
 		})
 		if len(c.Models) != 1 {
 			t.Fatalf("models = %v, want one entry", c.Models)
@@ -41,7 +41,7 @@ func TestCatalogFromDescribe(t *testing.T) {
 	t.Run("ignores configured providers with no catalog entry", func(t *testing.T) {
 		// nenya owns the catalog: a configured provider without a catalog
 		// entry must not become a fabricated model row.
-		c := CatalogFromDescribe([][2]string{{"anthropic", "claude-sonnet-4-5"}})
+		c := CatalogFromDescribe([]CatalogModel{{Provider: "anthropic", Model: "claude-sonnet-4-5"}})
 		if len(c.Models) != 1 {
 			t.Fatalf("models = %v, want only the real catalog entry", c.Models)
 		}
@@ -57,7 +57,7 @@ func TestCatalogFromDescribe(t *testing.T) {
 	})
 
 	t.Run("ignores blank provider or model", func(t *testing.T) {
-		c := CatalogFromDescribe([][2]string{{"", "x"}, {"y", ""}, {"", ""}})
+		c := CatalogFromDescribe([]CatalogModel{{Provider: "", Model: "x"}, {Provider: "y", Model: ""}, {Provider: "", Model: ""}})
 		if len(c.Models) != 0 {
 			t.Errorf("models = %v, want empty", c.Models)
 		}

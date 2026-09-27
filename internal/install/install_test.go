@@ -285,9 +285,9 @@ func TestInstallWindowsError(t *testing.T) {
 func TestInstallServiceFiles(t *testing.T) {
 	t.Run("handles missing deploy directory", func(t *testing.T) {
 		extractDir := t.TempDir()
-		err := installServiceFiles(extractDir)
-		if runtime.GOOS == "linux" && err == nil {
-			t.Error("expected error for missing systemd files on linux")
+		err := installServiceUnitsTo(context.Background(), scriptRunner{}, "/bin/nenya", extractDir, t.TempDir(), "/etc/nenya", "/etc/nenya/secrets.json")
+		if runtime.GOOS != "darwin" && err == nil {
+			t.Error("expected error for missing systemd files when service-unit is absent")
 		}
 	})
 }

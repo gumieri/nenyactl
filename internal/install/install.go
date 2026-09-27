@@ -198,7 +198,7 @@ func InstallWithHTTPAndRunner(ctx context.Context, cfg Config, hc HTTPDoer, runn
 				fmt.Fprintf(os.Stderr, "Warning: failed to install service files: %v\n", err)
 				fmt.Fprintln(os.Stderr, "You can run nenya directly from the command line.")
 			} else {
-				warnIfNonDefaultRoot(ctx, runner, dest, p)
+				warnIfNonDefaultRoot(p)
 			}
 		}
 
@@ -304,13 +304,6 @@ func checkInstalledContract(ctx context.Context, runner CommandRunner, execPath 
 	return nil
 }
 
-// installServiceFiles installs the platform's units from the release archive.
-// It is the documented fallback used when `nenya service-unit` is unavailable;
-// prefer installServiceUnits, which generates config-root-aware units.
-func installServiceFiles(extractDir string) error {
-	return installServiceFilesTo(extractDir, systemUnitDir())
-}
-
 // extractFile is an ordered archive member -> destination copy.
 type extractFile struct {
 	src string
@@ -330,8 +323,12 @@ type serviceUnitSpec struct {
 }
 
 // unitSpecs returns the units to install for the current platform.
-func unitSpecs() []serviceUnitSpec {
-	if runtime.GOOS == "darwin" {
+func unitSpecs() []serviceUnitSpec { return unitSpecsFor(runtime.GOOS) }
+
+// unitSpecsFor returns the units to install for a platform. It is
+// parameterized so both platform tables are testable on any host.
+func unitSpecsFor(goos string) []serviceUnitSpec {
+	if goos == "darwin" {
 		return []serviceUnitSpec{
 			{member: "deploy/nenya.plist", destination: "com.gumieri.nenya.plist", generated: true, init: "launchd"},
 		}
@@ -375,7 +372,7 @@ func installServiceUnitsTo(ctx context.Context, runner CommandRunner, execPath, 
 // the install's config root. When service-unit generated it, the unit does; when
 // the archive fallback was used instead, the unit pins the default root and the
 // user is warned.
-func warnIfNonDefaultRoot(ctx context.Context, runner CommandRunner, execPath string, p installPaths) {
+func warnIfNonDefaultRoot(p installPaths) {
 	if p.configDir == defaultUnitConfigDir {
 		return
 	}

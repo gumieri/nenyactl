@@ -167,7 +167,7 @@ func TestClientTokenInDir(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to secrets.json", func(t *testing.T) {
+	t.Run("reads a lone secrets.json", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, "secrets.json", `{"client_token":"nk-single"}`)
 		if got := ClientTokenInDir(dir); got != "nk-single" {
@@ -180,6 +180,21 @@ func TestClientTokenInDir(t *testing.T) {
 			t.Errorf("ClientTokenInDir = %q, want empty", got)
 		}
 	})
+}
+
+func TestClientTokenInFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.json")
+	writeFile(t, dir, "secrets.json", `{"client_token":"nk-single"}`)
+	if got := ClientTokenInFile(path); got != "nk-single" {
+		t.Errorf("ClientTokenInFile = %q, want nk-single", got)
+	}
+	if got := ClientTokenInFile(filepath.Join(dir, "absent.json")); got != "" {
+		t.Errorf("ClientTokenInFile(missing) = %q, want empty", got)
+	}
+	if got := ClientTokenInFile(""); got != "" {
+		t.Errorf("ClientTokenInFile(\"\") = %q, want empty", got)
+	}
 }
 
 func writeFile(t *testing.T, dir, name, content string) {

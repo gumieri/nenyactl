@@ -202,29 +202,32 @@ func writeStatusAgents(b *strings.Builder, effective []byte) {
 	}
 }
 
-// statusPort resolves the published/effective port from the deployment. It
-// prefers the effective config from `nenya describe --json`; when that surface
-// is unavailable (a released nenya without it) it falls back to a container's
-// published port and to the deployment's config file, mirroring nenya's
-// directory layout. It returns "" when no port can be determined.
+// statusPort resolves the published/effective port from the deployment. For a
+// container the compose published port is authoritative (describe reports the
+// container-internal listen address, e.g. :8080, not the host mapping). For
+// bare-metal it prefers the effective config from `nenya describe --json`; when
+// that surface is unavailable (a released nenya without it) it falls back to the
+// deployment's config file, mirroring nenya's directory layout. It returns ""
+// when no port can be determined.
 func statusPort(res dirResolution, desc nenya.Description, haveDesc bool) string {
-	if haveDesc && len(desc.Config) > 0 {
-		if p := portFromEffective(desc.Config); p != "" {
-			return p
-		}
-	}
 	if res.Kind == dirContainerRoot {
 		if p, ok := containers.HostPort(res.Path); ok && p != "" {
 			return p
 		}
 	}
-	// Fallback for a deployment whose nenya lacks `describe --json`: read the
-	// listen address from the layout actually in use (config.json, then any
-	// config.d drop-in). Deleted once describe is stable everywhere.
-	if p := portFromConfigFile(res.Info.ConfigFile); p != "" {
-		return p
+	if haveDesc && len(desc.Config) > 0 {
+		if p := portFromEffective(desc.Config); p != "" {
+			return p
+		}
 	}
-	if p := portFromConfigDropIns(res.Info.ConfigD); p != "" {
+	// Fallback for a deployment whose nenya lacks `describe --json`: read the
+	// listen address from the layout actually in use. On released nenya ≤0.15 a
+	// config.d drop-in makes nenya ignore config.json (the XOR hazard), so the
+	// drop-ins win when both are present.
+	if addon := portFromConfigDropIns(res.Info.ConfigD); addon != "" {
+		return addon
+	}
+	if p := portFromConfigFile(res.Info.ConfigFile); p != "" {
 		return p
 	}
 	if res.Kind == dirContainerRoot {

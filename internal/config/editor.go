@@ -51,6 +51,10 @@ type configModel struct {
 	editKey       string
 	editInput     textinput.Model
 	activeSection string
+	// activeScalar is true when the active section is a top-level scalar, so
+	// its single entry is keyed by the section name and the dotted key would
+	// otherwise double it.
+	activeScalar bool
 
 	// changes records edited top-level entries as dotted key -> raw JSON
 	// value. It is the only output of the editor: every change is applied by
@@ -193,6 +197,22 @@ func agentsFromEffective(effective []byte) ([]agentEntry, bool) {
 }
 
 func (m configModel) Init() tea.Cmd { return nil }
+
+// helpKeyMap returns the key map for the active screen. The sections and agents
+// screens handle "s" (save); the keys/edit screens do not, so they must not
+// advertise it.
+func (m configModel) helpKeyMap() tui.KeyMap {
+	switch m.screen {
+	case screenSections, screenAgents:
+		return tui.ListKeyMapWithSave()
+	case screenKeys:
+		return tui.ListKeyMap
+	case screenEdit:
+		return tui.FormKeyMap
+	default:
+		return m.helpKM
+	}
+}
 
 func (m *configModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -357,14 +377,18 @@ func (m *configModel) updateAgents(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *configModel) loadSection(sectionName string) {
 	m.activeSection = sectionName
+	m.activeScalar = false
 	field, ok := jsonc.GetField(m.config, sectionName)
 	if !ok {
 		m.entries = nil
+		m.cursor = 0
+		m.scrollKeys()
 		return
 	}
 
 	obj, ok := field.Value.(*hujson.Object)
 	if !ok {
+		m.activeScalar = true
 		m.entries = []configEntry{{Key: sectionName, Value: field}}
 		m.cursor = 0
 		m.scrollKeys()
@@ -450,7 +474,7 @@ func (m *configModel) applyEdit() {
 	// the section name itself, so the dotted form would double it (foo.foo);
 	// use the bare key in that case.
 	dottedKey := m.activeSection + "." + entry.Key
-	if entry.Key == m.activeSection {
+	if m.activeScalar && entry.Key == m.activeSection {
 		dottedKey = entry.Key
 	}
 	m.changes[dottedKey] = string(parseLiteralValue(raw))
@@ -533,7 +557,7 @@ func (m configModel) View() string {
 		content = m.viewAgents()
 	}
 
-	helpView := m.helpModel.View(m.helpKM)
+	helpView := m.helpModel.View(m.helpKeyMap())
 
 	out := lipgloss.JoinVertical(lipgloss.Top,
 		content,
@@ -828,7 +852,6 @@ func RunConfigEditor(effective []byte) (*EditorResult, bool, error) {
 
 	m := newConfigModel(cfg, effective)
 	m.resetCursor()
-	m.updateSectionsContent()
 
 	p := tea.NewProgram(&m, tea.WithAltScreen())
 	result, err := p.Run()

@@ -18,25 +18,23 @@ type CatalogModel struct {
 }
 
 // CatalogFromDescribe builds the picker catalog from nenya's describe provider
-// catalog. entries are (provider, model) pairs from
-// `describe.providers.catalog[]`; nenya owns the catalog, so no model is ever
-// fabricated from a provider name.
-func CatalogFromDescribe(entries [][2]string) Catalog {
+// catalog. entries are provider/model pairs (see CatalogModel); nenya owns the
+// catalog, so no model is ever fabricated from a provider name.
+func CatalogFromDescribe(entries []CatalogModel) Catalog {
 	type key struct{ provider, model string }
 	seen := make(map[key]bool)
 	var catalog Catalog
 
 	for _, e := range entries {
-		provider, model := e[0], e[1]
-		if provider == "" || model == "" {
+		if e.Provider == "" || e.Model == "" {
 			continue
 		}
-		k := key{provider, model}
+		k := key{e.Provider, e.Model}
 		if seen[k] {
 			continue
 		}
 		seen[k] = true
-		catalog.Models = append(catalog.Models, CatalogModel{Provider: provider, Model: model})
+		catalog.Models = append(catalog.Models, CatalogModel{Provider: e.Provider, Model: e.Model})
 	}
 
 	sort.Slice(catalog.Models, func(i, j int) bool {

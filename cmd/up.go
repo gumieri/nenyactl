@@ -210,24 +210,26 @@ func ensureProviderKeys(ctx context.Context, res dirResolution, desc nenya.Descr
 	return wrote
 }
 
-// providerDefs builds the provider-key picker rows from the contract catalog,
-// falling back to the scaffold shim when describe reports no catalog.
+// providerDefs builds the provider-key picker rows from the contract catalog.
+// nenya's catalog does not carry a display description or a key-required flag,
+// so Help is left empty (the table already shows the provider name) and a key is
+// assumed required (the safe default for remote providers). It falls back to the
+// scaffold shim when describe reports no providers.
 func providerDefs(catalog []nenya.ProviderCatalogEntry, configured []string) []containers.ProviderDef {
 	seen := make(map[string]bool)
 	var defs []containers.ProviderDef
-	for _, e := range catalog {
-		if e.Provider == "" || seen[e.Provider] {
-			continue
-		}
-		seen[e.Provider] = true
-		defs = append(defs, containers.ProviderDef{Name: e.Provider, Help: e.Provider, NeedsKey: true})
-	}
-	for _, provider := range configured {
+	add := func(provider string) {
 		if provider == "" || seen[provider] {
-			continue
+			return
 		}
 		seen[provider] = true
-		defs = append(defs, containers.ProviderDef{Name: provider, Help: provider, NeedsKey: true})
+		defs = append(defs, containers.ProviderDef{Name: provider, NeedsKey: true})
+	}
+	for _, e := range catalog {
+		add(e.Provider)
+	}
+	for _, provider := range configured {
+		add(provider)
 	}
 	if len(defs) == 0 {
 		return containers.BuiltinProviders

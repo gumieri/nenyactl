@@ -45,6 +45,37 @@ func TestResolvedEndpoint(t *testing.T) {
 		}
 	})
 
+	t.Run("uses the compose published port even when describe reports the internal port", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "compose.yml"), []byte("services:\n  nenya:\n    ports:\n      - \"127.0.0.1:9090:8080\"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(dir, "secrets"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "secrets", "01-client.json"), []byte(`{"client_token":"nk-container"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		// describe reports the container-internal :8080; the host port is the
+		// compose mapping (9090).
+		rr := newRecordingRunner()
+		rr.out = []byte(`{"contract_version":1,"config":{"server":{"listen_addr":":8080"}}}`)
+		fakeContract(t, rr)
+
+		res, err := resolveDir(dir, dirAttach, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ep, err := resolvedEndpoint(context.Background(), res)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ep.BaseURL != "http://localhost:9090" {
+			t.Errorf("BaseURL = %s, want the compose published port", ep.BaseURL)
+		}
+	})
+
 	t.Run("reads a bare-metal secrets.json", func(t *testing.T) {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{}"), 0o644); err != nil {

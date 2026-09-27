@@ -80,5 +80,5 @@ func ClientToken(dir string) string {
 	if token := secrets.ClientTokenInDir(filepath.Join(dir, "secrets")); token != "" {
 		return token
 	}
-	return secrets.ClientTokenInDir(dir)
+	return secrets.ClientTokenInFile(filepath.Join(dir, "secrets.json"))
 }

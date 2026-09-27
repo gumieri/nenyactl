@@ -14,10 +14,10 @@ func update(m *tuiModel, msg tea.Msg) *tuiModel {
 // testCatalog is a small catalog so the TUI tests exercise real provider/model
 // rows without a nenya binary.
 func testCatalog() Catalog {
-	return CatalogFromDescribe([][2]string{
-		{"anthropic", "claude-sonnet-4-5"},
-		{"gemini", "gemini-2.5-flash"},
-		{"openai", "gpt-5"},
+	return CatalogFromDescribe([]CatalogModel{
+		{Provider: "anthropic", Model: "claude-sonnet-4-5"},
+		{Provider: "gemini", Model: "gemini-2.5-flash"},
+		{Provider: "openai", Model: "gpt-5"},
 	})
 }
 
@@ -314,28 +314,31 @@ func TestAgentsTUI_LoadDefaultsFromCatalog(t *testing.T) {
 	m := newTestModel()
 	m.loadDefaults()
 
-	// One agent per provider, named after the provider, seeded with that
-	// provider's first model.
-	want := map[string]string{
-		"anthropic": "claude-sonnet-4-5",
-		"gemini":    "gemini-2.5-flash",
-		"openai":    "gpt-5",
+	// A single neutral agent seeded from the first catalog model; role names
+	// are nenya's domain, so no provider-derived names are fabricated.
+	if len(m.agents) != 1 {
+		t.Fatalf("agents = %d, want 1: %+v", len(m.agents), m.agents)
 	}
-	if len(m.agents) != len(want) {
-		t.Fatalf("agents = %d, want %d: %+v", len(m.agents), len(want), m.agents)
+	a := m.agents[0]
+	if a.Name != "default" {
+		t.Errorf("agent name = %q, want default", a.Name)
 	}
-	for _, a := range m.agents {
-		model, ok := want[a.Name]
-		if !ok {
-			t.Errorf("unexpected agent %q", a.Name)
-			continue
-		}
-		if len(a.Models) != 1 || a.Models[0] != model {
-			t.Errorf("agent %s models = %v, want [%s]", a.Name, a.Models, model)
-		}
-		if a.Strategy != defaultStrategy {
-			t.Errorf("agent %s strategy = %q, want %q", a.Name, a.Strategy, defaultStrategy)
-		}
+	if a.Strategy != defaultStrategy {
+		t.Errorf("strategy = %q, want %q", a.Strategy, defaultStrategy)
+	}
+	if len(m.catalog.Models) == 0 {
+		t.Fatal("catalog is empty")
+	}
+	if len(a.Models) != 1 || a.Models[0] != m.catalog.Models[0].Model {
+		t.Errorf("models = %v, want [%s]", a.Models, m.catalog.Models[0].Model)
+	}
+}
+
+func TestAgentsTUI_LoadDefaultsEmptyCatalog(t *testing.T) {
+	m := newTUIModel(Catalog{})
+	m.loadDefaults()
+	if len(m.agents) != 0 {
+		t.Errorf("agents = %+v, want none for an empty catalog", m.agents)
 	}
 }
 

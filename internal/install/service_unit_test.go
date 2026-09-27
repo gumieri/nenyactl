@@ -2,12 +2,93 @@ package install
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestWarnIfNonDefaultRoot(t *testing.T) {
+	t.Run("notes when the unit references the config root", func(t *testing.T) {
+		unitDir := t.TempDir()
+		dest := unitSpecs()[0].destination
+		if err := os.WriteFile(filepath.Join(unitDir, dest), []byte("ExecStart=/bin/nenya --config-dir /custom/nenya\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// Capture stderr.
+		old := os.Stderr
+		r, w, _ := os.Pipe()
+		os.Stderr = w
+		warnIfNonDefaultRoot(installPaths{unitDir: unitDir, configDir: "/custom/nenya"})
+		_ = w.Close()
+		os.Stderr = old
+		out, _ := io.ReadAll(r)
+		if !strings.Contains(string(out), "Note: generated") {
+			t.Errorf("stderr = %q, want a generated note", out)
+		}
+	})
+
+	t.Run("warns when the unit pins the default root", func(t *testing.T) {
+		unitDir := t.TempDir()
+		dest := unitSpecs()[0].destination
+		if err := os.WriteFile(filepath.Join(unitDir, dest), []byte("LoadCredential=secrets:/etc/nenya/secrets.json\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		old := os.Stderr
+		r, w, _ := os.Pipe()
+		os.Stderr = w
+		warnIfNonDefaultRoot(installPaths{unitDir: unitDir, configDir: "/custom/nenya", secretsFile: "/custom/nenya/secrets.json"})
+		_ = w.Close()
+		os.Stderr = old
+		out, _ := io.ReadAll(r)
+		if !strings.Contains(string(out), "Warning:") || !strings.Contains(string(out), "--config-dir /custom/nenya") {
+			t.Errorf("stderr = %q, want a warning with the regen command", out)
+		}
+	})
+
+	t.Run("silent for the default root", func(t *testing.T) {
+		old := os.Stderr
+		r, w, _ := os.Pipe()
+		os.Stderr = w
+		warnIfNonDefaultRoot(installPaths{unitDir: t.TempDir(), configDir: defaultUnitConfigDir})
+		_ = w.Close()
+		os.Stderr = old
+		out, _ := io.ReadAll(r)
+		if len(out) != 0 {
+			t.Errorf("stderr = %q, want no output for the default root", out)
+		}
+	})
+}
+
+func TestUnitSpecsForPlatforms(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		specs := unitSpecsFor(goos)
+		if len(specs) == 0 {
+			t.Fatalf("%s: no specs", goos)
+		}
+		for _, s := range specs {
+			if s.member == "" || s.destination == "" {
+				t.Errorf("%s: incomplete spec %+v", goos, s)
+			}
+			if s.generated && s.init == "" {
+				t.Errorf("%s: generated spec %+v has no init", goos, s)
+			}
+		}
+		if goos == "darwin" && specs[0].destination != "com.gumieri.nenya.plist" {
+			t.Errorf("darwin destination = %q", specs[0].destination)
+		}
+	}
+}
+
+func TestServiceUnitArgv(t *testing.T) {
+	builder := func(outputs map[string]string) scriptRunner { return scriptRunner{outputs: outputs} }
+	argv := "/bin/nenya service-unit --init systemd --exec-path /bin/nenya --config-dir /etc/nenya --secrets-file /etc/nenya/secrets.json"
+	if _, ok := serviceUnitContent(context.Background(), builder(map[string]string{argv: "[Unit]"}), "/bin/nenya", "systemd", "/etc/nenya", "/etc/nenya/secrets.json"); !ok {
+		t.Errorf("service-unit argv mismatch; want exactly %q (CONTRACT.md §4.5)", argv)
+	}
+}
 
 func TestServiceUnitContentPrefersNenyaServiceUnit(t *testing.T) {
 	if runtime.GOOS == "darwin" {

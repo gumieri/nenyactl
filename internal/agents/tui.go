@@ -2,7 +2,6 @@ package agents
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -35,9 +34,10 @@ type Agent struct {
 }
 
 type modelState struct {
-	ID       string
-	Provider string
-	Selected bool
+	ID        string
+	Provider  string
+	Qualified string // provider/model, the selection key
+	Selected  bool
 }
 
 type tuiModel struct {
@@ -96,6 +96,23 @@ func newTUIModel(catalog Catalog) tuiModel {
 
 func (m tuiModel) Init() tea.Cmd {
 	return nil
+}
+
+// helpKeyMap returns the key map for the active screen. Only the list screen
+// handles "s", so only it advertises save; elsewhere "s" is input text.
+func (m tuiModel) helpKeyMap() tui.KeyMap {
+	switch m.screen {
+	case screenList:
+		return tui.ListKeyMapWithSave()
+	case screenEdit:
+		return tui.FormKeyMap
+	case screenPicker:
+		return tui.PickerKeyMap
+	case screenConfirm:
+		return tui.ConfirmKeyMap
+	default:
+		return m.helpKM
+	}
 }
 
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -303,27 +320,23 @@ func (m *tuiModel) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// loadDefaults seeds one agent per provider in the catalog using the first
-// model of each. The set comes from nenya's effective catalog, not a hardcoded
-// registry.
+// loadDefaults seeds a single neutral agent with the first catalog model when
+// the user turns auto-agents off. It deliberately does not fabricate role names
+// or a model distribution: nenya owns the auto-agent defaults, and inventing
+// roles from the provider list would be arbitrary.
 func (m *tuiModel) loadDefaults() {
 	m.agents = nil
-	byProvider := make(map[string]string)
-	for _, cm := range m.catalog.Models {
-		if _, ok := byProvider[cm.Provider]; !ok {
-			byProvider[cm.Provider] = cm.Model
-		}
+	if len(m.catalog.Models) == 0 {
+		m.cursor = 0
+		m.scrollAgents()
+		return
 	}
-	for provider, model := range byProvider {
-		m.agents = append(m.agents, Agent{
-			Name:     provider,
-			Strategy: defaultStrategy,
-			Models:   []string{model},
-		})
-	}
-	sort.Slice(m.agents, func(i, j int) bool {
-		return m.agents[i].Name < m.agents[j].Name
-	})
+	first := m.catalog.Models[0]
+	m.agents = []Agent{{
+		Name:     "default",
+		Strategy: defaultStrategy,
+		Models:   []string{first.Model},
+	}}
 	m.cursor = 0
 	m.scrollAgents()
 }
@@ -371,16 +384,19 @@ func (m *tuiModel) loadModels() {
 			!strings.Contains(strings.ToLower(def.Provider), filter) {
 			continue
 		}
+		// Selection is keyed by the (provider, model) pair so two providers
+		// offering the same model name do not both read as selected.
+		qualified := def.Provider + "/" + name
 		sel := false
 		if m.cursor < len(m.agents) {
 			for _, mdl := range m.agents[m.cursor].Models {
-				if mdl == name || mdl == def.Provider+"/"+name {
+				if mdl == qualified || mdl == name {
 					sel = true
 					break
 				}
 			}
 		}
-		m.models = append(m.models, modelState{ID: name, Provider: def.Provider, Selected: sel})
+		m.models = append(m.models, modelState{ID: name, Provider: def.Provider, Qualified: qualified, Selected: sel})
 	}
 	m.modelCursor = 0
 	m.pickerView.GotoTop()
@@ -468,7 +484,7 @@ func (m tuiModel) View() string {
 		content = m.viewConfirm()
 	}
 
-	helpView := m.helpModel.View(m.helpKM)
+	helpView := m.helpModel.View(m.helpKeyMap())
 
 	out := lipgloss.JoinVertical(lipgloss.Top,
 		content,
@@ -798,7 +814,7 @@ func (m *tuiModel) editorResult() (bool, map[string]any, error) {
 	}
 
 	if len(m.agents) == 0 {
-		return false, nil, nil
+		return false, nil, fmt.Errorf("no agents to save; add an agent or leave auto-agents on")
 	}
 
 	agentsMap := make(map[string]map[string]any)

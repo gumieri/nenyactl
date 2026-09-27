@@ -95,10 +95,10 @@ func ClientTokenFromJSON(data []byte) string {
 }
 
 // ClientTokenInDir resolves the effective client_token in a secrets directory,
-// merging *.json files in ascending name order (last non-empty wins) with a
-// fallback to a single "<dir>/secrets.json". This mirrors nenya's secrets merge
-// order; it is a documented read-only compatibility check for the window before
-// a contract read surface exists (NENYA-103), not the source of truth.
+// merging *.json files in ascending name order (last non-empty wins). This
+// mirrors nenya's secrets merge order; it is a documented read-only
+// compatibility check for the window before a contract read surface exists
+// (NENYA-103), not the source of truth.
 func ClientTokenInDir(dir string) string {
 	if dir == "" {
 		return ""
@@ -122,10 +122,18 @@ func ClientTokenInDir(dir string) string {
 			}
 		}
 	}
-	if token == "" {
-		if data, err := os.ReadFile(filepath.Join(dir, "secrets.json")); err == nil {
-			token = ClientTokenFromJSON(data)
-		}
-	}
 	return token
+}
+
+// ClientTokenInFile returns the client_token in a single secrets file, or ""
+// when the file is missing, unreadable, or carries no token.
+func ClientTokenInFile(path string) string {
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return ClientTokenFromJSON(data)
 }

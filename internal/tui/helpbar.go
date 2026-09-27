@@ -55,7 +55,15 @@ var ListKeyMap = KeyMap{
 	Delete: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
 	Add:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add")),
 	Toggle: key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
-	Save:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "save")),
+}
+
+// ListKeyMapWithSave is ListKeyMap plus the save binding, for list screens that
+// handle "s". Screens that do not handle it must not advertise it, since "s"
+// would be typed into an input there.
+func ListKeyMapWithSave() KeyMap {
+	km := ListKeyMap
+	km.Save = key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "save"))
+	return km
 }
 
 var FormKeyMap = KeyMap{

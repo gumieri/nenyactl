@@ -16,6 +16,9 @@ var agentsCmd = &cobra.Command{
 	Long: `Configure how Nenya routes requests to models.
 
 Choose between auto-generated agents (recommended) or custom agent configuration.
+The model list comes from the installed nenya (` + "`nenya describe --json`" + `), so it
+matches what the gateway actually supports; this command requires that contract
+surface.
 
 Detects whether Nenya is installed as bare-metal or as a container.
 Use --dir to override automatic detection.
@@ -71,7 +74,7 @@ func runAgents(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("agents requires `nenya describe --json` (contract target): %w", err)
 	}
-	catalog := agents.CatalogFromDescribe(catalogPairs(desc.Providers.Catalog))
+	catalog := agents.CatalogFromDescribe(catalogModels(desc.Providers.Catalog))
 	if len(catalog.Models) == 0 {
 		return fmt.Errorf("nenya reported no providers or models; configure a provider key first (nenyactl secret set --provider <name> <key>)")
 	}
@@ -105,33 +108,34 @@ func runAgents(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("encode agents: %w", err)
 	}
 
-	// Disable auto-agents first: the safer partial state is custom agents
-	// present with auto still on (depends on what nenya does with both) than
-	// auto off with the previous agents list. Each write reports its own path.
-	discoveryPath, err := client.SetConfig(cmd.Context(), "discovery.auto_agents", "false")
-	if err != nil {
-		return fmt.Errorf("disable auto-agents: %w", err)
-	}
-	fmt.Println(successStyle.Render("✓"), "Auto-agents disabled →", discoveryPath)
-
+	// Write the custom agents first, then disable auto-agents. The safer
+	// partial state is custom agents present with auto still on (the custom
+	// set is already in the config) rather than auto off with the previous
+	// agents list. Each write reports its own path.
 	path, err := client.SetConfig(cmd.Context(), "agents", string(agentsJSON))
 	if err != nil {
 		return fmt.Errorf("write agents: %w", err)
 	}
 	fmt.Println(successStyle.Render("✓"), "Custom agents saved →", path)
 
+	discoveryPath, err := client.SetConfig(cmd.Context(), "discovery.auto_agents", "false")
+	if err != nil {
+		return fmt.Errorf("disable auto-agents: %w", err)
+	}
+	fmt.Println(successStyle.Render("✓"), "Auto-agents disabled →", discoveryPath)
+
 	return nil
 }
 
-// catalogPairs flattens the describe provider catalog into (provider, model)
-// pairs for the agents picker, so the picker stays independent of the contract
-// client's types.
-func catalogPairs(catalog []nenya.ProviderCatalogEntry) [][2]string {
-	pairs := make([][2]string, 0, len(catalog))
+// catalogModels converts the describe provider catalog into the agents picker's
+// CatalogModel list, so the picker stays independent of the contract client's
+// types.
+func catalogModels(catalog []nenya.ProviderCatalogEntry) []agents.CatalogModel {
+	models := make([]agents.CatalogModel, 0, len(catalog))
 	for _, e := range catalog {
-		pairs = append(pairs, [2]string{e.Provider, e.Model})
+		models = append(models, agents.CatalogModel{Provider: e.Provider, Model: e.Model})
 	}
-	return pairs
+	return models
 }
 
 // parseAgentsMode maps an explicit --mode value to a detect.Mode.

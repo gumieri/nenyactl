@@ -146,7 +146,13 @@ func runContainerSetupWithExec(ctx context.Context, ex execer, dir, listenAddr s
 		fmt.Println(successStyle.Render("✓"), "Generated client token")
 	}
 
-	keys, err := containers.CollectProviderKeys()
+	// The provider picker uses nenya's catalog when the binary is present; the
+	// builtin shim is only for a host that has no nenya yet.
+	providers := containers.BuiltinProviders
+	if desc, derr := res.Contract().Describe(ctx); derr == nil {
+		providers = providerDefs(desc.Providers.Catalog, desc.Providers.Configured)
+	}
+	keys, err := containers.CollectProviderKeysFrom(providers)
 	if err != nil {
 		fmt.Println(dimStyle.Render("  TUI skipped or cancelled"))
 		keys = nil
