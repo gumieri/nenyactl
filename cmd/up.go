@@ -58,7 +58,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	printClientSnippets(res)
+	printClientSnippets(ctx, res)
 	return nil
 }
 

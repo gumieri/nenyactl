@@ -102,7 +102,13 @@ func TestUpDeploymentCreatesMissingConfig(t *testing.T) {
 	}
 
 	rr := newRecordingRunner()
-	// No output: Describe fails, so no provider keys are written.
+	// describe succeeds and reports a port, so up can wait for health; no
+	// provider keys are written because the catalog/configured set is empty.
+	rr.rec.onCall = func(args []string) {
+		if len(args) > 0 && args[0] == "describe" {
+			rr.out = []byte(`{"contract_version":1,"config":{"server":{"listen_addr":":8080"}}}`)
+		}
+	}
 	fakeContract(t, rr)
 
 	savedStart := upServiceRun

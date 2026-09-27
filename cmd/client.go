@@ -1,16 +1,14 @@
 package cmd
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/gumieri/nenyactl/internal/clients"
 	"github.com/gumieri/nenyactl/internal/containers"
-	"github.com/gumieri/nenyactl/internal/jsonc"
 	"github.com/spf13/cobra"
 )
 
@@ -69,7 +67,7 @@ func runClientAdd(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	ep, err := resolvedEndpoint(res)
+	ep, err := resolvedEndpoint(cmd.Context(), res)
 	if err != nil {
 		return err
 	}
@@ -113,63 +111,24 @@ func runClientAdd(cmd *cobra.Command, args []string) error {
 	}
 }
 
-// resolvedEndpoint reads the published port and client token from a resolved
-// deployment. It never hardcodes a token location; for bare-metal it reads the
-// effective listen address from the config file when present.
-func resolvedEndpoint(res dirResolution) (clients.Endpoint, error) {
-	port := containers.PublishedPort(res.Path)
-	if res.Kind == dirConfigRoot {
-		if p := listenPort(res.Info.ConfigFile); p != "" {
-			port = p
-		}
+// resolvedEndpoint resolves the published port and client token from a
+// deployment. The port comes from `nenya describe --json` (the effective merged
+// config), so config.json + config.d layering is honored; a container's compose
+// mapping is used only when describe cannot report one. Tokens come from the
+// deployment's secrets, never a hardcoded path.
+func resolvedEndpoint(ctx context.Context, res dirResolution) (clients.Endpoint, error) {
+	desc, _ := res.Contract().Describe(ctx)
+	port := statusPort(res, desc, len(desc.Config) > 0)
+	if port == "" {
+		return clients.Endpoint{}, fmt.Errorf("could not resolve the gateway port for %s", res.Path)
 	}
 	base := "http://localhost:" + port
 
 	token := containers.ClientToken(res.Path)
 	if token == "" {
-		token = readSecretsToken(res.Info.SecretsFile())
-	}
-	if token == "" {
 		return clients.Endpoint{}, fmt.Errorf("no client token found for %s; create one with 'nenyactl secret bootstrap --dir %s'", res.Path, res.Path)
 	}
 	return clients.Endpoint{BaseURL: base, Token: token}, nil
-}
-
-// listenPort extracts the port from server.listen_addr in a JSONC config file.
-// It returns "" when the file or field is absent/unparseable.
-func listenPort(configFile string) string {
-	v, err := jsonc.ReadFile(configFile)
-	if err != nil {
-		return ""
-	}
-	field, ok := jsonc.GetNestedField(v, []string{"server", "listen_addr"})
-	if !ok {
-		return ""
-	}
-	addr := jsonc.FieldValueString(field)
-	addr = strings.Trim(addr, `"`)
-	_, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return ""
-	}
-	return port
-}
-
-func readSecretsToken(path string) string {
-	if path == "" {
-		return ""
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	var s struct {
-		ClientToken string `json:"client_token"`
-	}
-	if err := json.Unmarshal(data, &s); err != nil {
-		return ""
-	}
-	return s.ClientToken
 }
 
 // redactToken replaces the token with a placeholder in printed output.
@@ -249,8 +208,8 @@ func expandHome(path string) (string, error) {
 // printClientSnippets prints a short connect block with the resolved endpoint
 // and a redacted token, so the next action is copy-paste. It is best-effort and
 // never prints the token itself.
-func printClientSnippets(res dirResolution) {
-	ep, err := resolvedEndpoint(res)
+func printClientSnippets(ctx context.Context, res dirResolution) {
+	ep, err := resolvedEndpoint(ctx, res)
 	if err != nil {
 		return
 	}

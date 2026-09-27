@@ -67,7 +67,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		if dir, err := install.ResolveConfigRoot(ctx, cfg, install.NewExecRunner(), "/usr/bin/nenya"); err == nil {
 			root = dir
 		}
-		printClientSnippets(configRoot(root))
+		printClientSnippets(ctx, configRoot(root))
 	}
 	return nil
 }

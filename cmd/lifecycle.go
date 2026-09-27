@@ -219,7 +219,7 @@ func statusPort(res dirResolution, desc nenya.Description, haveDesc bool) string
 			}
 		}
 	}
-	return listenPort(res.Info.ConfigFile)
+	return ""
 }
 
 // healthStatus polls /healthz and reports whether the gateway is healthy along

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -23,11 +24,16 @@ func TestResolvedEndpoint(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		// describe reports no listen_addr, so the compose mapping is used.
+		rr := newRecordingRunner()
+		rr.out = []byte(`{"contract_version":1,"config":{}}`)
+		fakeContract(t, rr)
+
 		res, err := resolveDir(dir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ep, err := resolvedEndpoint(res)
+		ep, err := resolvedEndpoint(context.Background(), res)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -48,11 +54,15 @@ func TestResolvedEndpoint(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		rr := newRecordingRunner()
+		rr.out = []byte(`{"contract_version":1,"config":{"server":{"listen_addr":":8080"}}}`)
+		fakeContract(t, rr)
+
 		res, err := resolveDir(dir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ep, err := resolvedEndpoint(res)
+		ep, err := resolvedEndpoint(context.Background(), res)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -64,24 +74,31 @@ func TestResolvedEndpoint(t *testing.T) {
 		}
 	})
 
-	t.Run("bare-metal reads the configured port", func(t *testing.T) {
+	t.Run("bare-metal reads the port from the effective describe config", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"server":{"listen_addr":":9191"}}`), 0o644); err != nil {
+		// The raw config.json has no listen_addr; the effective config from
+		// describe does (e.g. from a config.d overlay), and must win.
+		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{}"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(dir, "secrets.json"), []byte(`{"client_token":"nk-bare"}`), 0o600); err != nil {
 			t.Fatal(err)
 		}
+
+		rr := newRecordingRunner()
+		rr.out = []byte(`{"contract_version":1,"config":{"server":{"listen_addr":":9090"}}}`)
+		fakeContract(t, rr)
+
 		res, err := resolveDir(dir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ep, err := resolvedEndpoint(res)
+		ep, err := resolvedEndpoint(context.Background(), res)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if ep.BaseURL != "http://localhost:9191" {
-			t.Errorf("BaseURL = %s, want the configured :9191", ep.BaseURL)
+		if ep.BaseURL != "http://localhost:9090" {
+			t.Errorf("BaseURL = %s, want the describe-effective :9090", ep.BaseURL)
 		}
 	})
 
@@ -90,12 +107,37 @@ func TestResolvedEndpoint(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{}"), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		rr := newRecordingRunner()
+		rr.out = []byte(`{"contract_version":1,"config":{"server":{"listen_addr":":8080"}}}`)
+		fakeContract(t, rr)
+
 		res, err := resolveDir(dir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := resolvedEndpoint(res); err == nil {
+		if _, err := resolvedEndpoint(context.Background(), res); err == nil {
 			t.Fatal("expected error without a token")
+		}
+	})
+
+	t.Run("errors when no port can be resolved", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "secrets.json"), []byte(`{"client_token":"nk-bare"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		rr := newRecordingRunner()
+		rr.out = []byte(`{"contract_version":1,"config":{}}`)
+		fakeContract(t, rr)
+
+		res, err := resolveDir(dir, dirAttach, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := resolvedEndpoint(context.Background(), res); err == nil {
+			t.Fatal("expected error without a resolvable port")
 		}
 	})
 }
