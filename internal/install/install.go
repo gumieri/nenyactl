@@ -2,6 +2,7 @@ package install
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/gumieri/nenyactl/internal/contract"
 	"github.com/gumieri/nenyactl/internal/paths"
 )
 
@@ -150,6 +152,10 @@ func InstallWithHTTPAndRunner(ctx context.Context, cfg Config, hc HTTPDoer, runn
 
 	fmt.Printf("Installed nenya %s to %s\n", tag, dest)
 
+	if err := checkInstalledContract(ctx, runner, dest); err != nil {
+		return err
+	}
+
 	if cfg.UserInstall && !cfg.SkipService {
 		fmt.Fprintln(os.Stderr, "Note: --user installs the binary and user config only; no system service is written.")
 	}
@@ -242,11 +248,41 @@ func verifyDownload(ctx context.Context, cfg Config, hc HTTPDoer, runner Command
 // normalizeTag ensures a release tag keeps its conventional leading `v`, since
 // download URLs are /releases/download/vX.Y.Z/ while artifact names omit it.
 func normalizeTag(v string) string {
-	v = strings.TrimSpace(v)
-	if v == "" || strings.HasPrefix(v, "v") {
-		return v
+	return NormalizeTag(v)
+}
+
+// checkInstalledContract fails fast when the installed binary reports a
+// nenya contract_version outside the range this build supports (CONTRACT.md §2).
+// It feature-detects `describe --json`, then `version --json`; a binary that
+// exposes neither (older releases) is accepted.
+func checkInstalledContract(ctx context.Context, runner CommandRunner, execPath string) error {
+	type versioned struct {
+		ContractVersion int `json:"contract_version"`
 	}
-	return "v" + v
+
+	probe := func(args ...string) (versioned, bool) {
+		out, err := runner.Output(ctx, execPath, args...)
+		if err != nil || len(out) == 0 {
+			return versioned{}, false
+		}
+		var v versioned
+		if err := json.Unmarshal(out, &v); err != nil {
+			return versioned{}, false
+		}
+		return v, true
+	}
+
+	v, ok := probe("describe", "--json")
+	if !ok {
+		v, ok = probe("version", "--json")
+	}
+	if !ok || v.ContractVersion == 0 {
+		return nil
+	}
+	if err := contract.Check(v.ContractVersion); err != nil {
+		return fmt.Errorf("installed nenya %s: %w", execPath, err)
+	}
+	return nil
 }
 
 func installServiceFiles(extractDir string) error {
@@ -293,6 +329,19 @@ func copyFromExtract(extractDir string, files []extractFile) error {
 		fmt.Printf("Installed %s\n", f.dst)
 	}
 	return nil
+}
+
+// NewExecRunner returns the production CommandRunner backed by os/exec.
+func NewExecRunner() CommandRunner { return execRunner{} }
+
+// NormalizeTag ensures a release tag keeps its conventional leading `v`, since
+// download URLs are /releases/download/vX.Y.Z/ while artifact names omit it.
+func NormalizeTag(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" || strings.HasPrefix(v, "v") {
+		return v
+	}
+	return "v" + v
 }
 
 // archiveFilename builds the release archive name for a tag. The tag keeps its

@@ -32,14 +32,15 @@ jobs:
           go-version: '1.26'
           cache: true
 
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v4.1.2
+
       - name: Download dependencies
         run: go mod download
-
-      - name: Build nenyactl
-        run: go build -o bin/nenyactl ./cmd/nenyactl/
 
       - name: Golden-path E2E against the real nenya release
         env:
           NENYACTL_E2E: "1"
-          NENYA_E2E_VERSION: ${{ inputs.version }}
+          NENYA_E2E_VERSION: ${{ github.event.inputs.version }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: go test -v ./test/e2e/... -count=1 -timeout 15m

@@ -7,23 +7,18 @@ contract, never nenya's Go packages.
 
 ## The `contract_version` we support
 
-`nenyactl` declares its supported range in `internal/contract`:
-
-```go
-// Supported is the inclusive [min, max] contract_version range this build
-// supports.
-var Supported = [2]int{1, 1}
-```
-
-When nenyactl can read the installed nenya's contract version (via
-`nenya describe --json`, or `nenya version --json` on builds that expose it),
-it calls `contract.Check(v)`. An out-of-range installation fails fast with a
-message naming the installed and supported versions, instead of misbehaving
-silently:
+`nenyactl` declares its supported range in `internal/contract`, and every
+install path enforces it. Immediately after writing the binary, nenyactl runs
+the installed `nenya version --json` (stable) and falls back to
+`describe --json` (target) to read `contract_version`, then calls
+`contract.Check(v)`. An out-of-range installation fails fast with a message
+naming the installed and supported versions, instead of misbehaving silently:
 
 ```text
-nenya contract_version 2 is not supported by this nenyactl build (supports 1..1); update nenyactl or install a compatible nenya
+installed nenya /usr/bin/nenya: nenya contract_version 2 is not supported by this nenyactl build (supports 1..1); update nenyactl or install a compatible nenya
 ```
+
+A binary that exposes neither surface (pre-contract releases) passes the check.
 
 ## Compatibility matrix
 
@@ -46,7 +41,7 @@ checks the exit status; until it ships, nenyactl uses a documented fallback:
 |---------|--------|-------------------------|
 | `version --json` | stable | — |
 | `paths --json` | target | platform defaults (`/etc/nenya`, `~/.local/share/nenyactl/nenya`) |
-| `describe --json` | target | edit the single file the detected layout uses |
+| `describe --json` | target | contract check falls back to `version --json`; config edits use the single file the detected layout uses |
 | `example-config` | target | a minimal, documented bootstrap config |
 | `service-unit` | target | the unit shipped in the release archive (`deploy/`) |
 | `config set` / `secret set` | target | direct edits to the file the layout uses |
@@ -58,4 +53,5 @@ Fallbacks are marked in code and are removed as the contract commands ship.
 - **nenyactl → newer**: safe across additive contract changes.
 - **nenya → newer minor**: safe; nenyactl features-detects anything new.
 - **nenya → breaking contract bump**: nenyactl will fail fast with the message
-  above. Upgrade nenyactl (or pin nenya) to restore compatibility.
+  above on install (and `doctor`, once it ships). Upgrade nenyactl (or pin
+  nenya) to restore compatibility.

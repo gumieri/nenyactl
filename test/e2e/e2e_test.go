@@ -1,19 +1,11 @@
 // Package e2e exercises the real nenyactl <-> nenya seam against a real nenya
-// release. It is gated on NENYACTL_E2E=1 so it never runs in the unit job.
-//
-// It downloads the latest (or NENYA_E2E_VERSION) release, verifies its SHA-256,
-// extracts the real archive, then starts the real binary against a mock
-// OpenAI-compatible upstream and asserts the golden path: health, an
-// authenticated request, and a streamed chat completion.
+// release: it installs through nenyactl's own verified install path, then runs
+// the installed binary. It is gated on NENYACTL_E2E=1 so it never runs in the
+// unit job.
 package e2e
 
 import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,6 +22,7 @@ import (
 	"time"
 
 	"github.com/gumieri/nenyactl/internal/contract"
+	"github.com/gumieri/nenyactl/internal/install"
 )
 
 const (
@@ -53,53 +46,49 @@ func TestGoldenPathAgainstLatestRelease(t *testing.T) {
 			t.Fatalf("resolve latest nenya release: %v", err)
 		}
 	}
-	version := strings.TrimPrefix(tag, "v")
+	tag = install.NormalizeTag(tag)
 	t.Logf("nenya release under test: %s (%s/%s)", tag, runtime.GOOS, runtime.GOARCH)
 
+	// Install through nenyactl's own path: real download, SHA-256 + cosign
+	// verification, archive extraction, and --user bootstrap.
 	dir := t.TempDir()
-	binPath := filepath.Join(dir, "nenya")
-	members, err := downloadAndExtract(ctx, tag, version, binPath)
-	if err != nil {
-		t.Fatalf("download and extract release: %v", err)
+	home := filepath.Join(dir, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	assertArchiveLayout(t, members)
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
 
-	// The mock upstream is an OpenAI-compatible SSE endpoint.
-	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/chat/completions" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprint(w, "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello-e2e\"}}]}\n\n")
-		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
-	}))
+	if err := install.InstallWithHTTPAndRunner(ctx, install.Config{
+		UserInstall: true,
+		Version:     tag,
+	}, http.DefaultClient, install.NewExecRunner()); err != nil {
+		t.Fatalf("nenyactl install against real release %s: %v", tag, err)
+	}
+
+	binPath := filepath.Join(home, ".local", "bin", "nenya")
+	if _, err := os.Stat(binPath); err != nil {
+		t.Fatalf("installed binary missing at %s: %v", binPath, err)
+	}
+
+	configDir := filepath.Join(home, ".config", "nenya")
+	if _, err := os.Stat(filepath.Join(configDir, "config.json")); err != nil {
+		t.Fatalf("install did not bootstrap config: %v", err)
+	}
+	tokenFile := filepath.Join(configDir, "secrets.json")
+	if info, err := os.Stat(tokenFile); err != nil {
+		t.Fatalf("install did not bootstrap secrets: %v", err)
+	} else if info.Mode().Perm() != 0o600 {
+		t.Fatalf("secrets.json mode = %o, want 0600", info.Mode().Perm())
+	}
+	token := readClientToken(t, tokenFile)
+
+	// Point the installed config at a mock OpenAI-compatible upstream.
+	mock := httptest.NewServer(mockUpstream())
 	defer mock.Close()
 
-	configDir := filepath.Join(dir, "config")
-	secretsDir := filepath.Join(dir, "secrets")
-	if err := os.MkdirAll(secretsDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	listen := freeAddr(t)
-
-	config := fmt.Sprintf(`{
-  "server": {"listen_addr": %q},
-  "discovery": {"enabled": false},
-  "providers": {"mock": {"url": %q, "auth_style": "none"}},
-  "agents": {"e2e": {"strategy": "fallback", "models": [{"provider": "mock", "model": "e2e-model", "max_context": 8192}]}}
-}`, listen, mock.URL+"/v1/chat/completions")
-	configFile := filepath.Join(configDir, "config.json")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(configFile, []byte(config), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(secretsDir, "secrets.json"), []byte(`{"client_token":"nk-e2e-test"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeConfig(t, filepath.Join(configDir, "config.json"), listen, mock.URL+"/v1/chat/completions")
 
 	logPath := filepath.Join(dir, "nenya.log")
 	logFile, err := os.Create(logPath)
@@ -108,8 +97,8 @@ func TestGoldenPathAgainstLatestRelease(t *testing.T) {
 	}
 	defer func() { _ = logFile.Close() }()
 
-	cmd := exec.CommandContext(ctx, binPath, "-config", configFile)
-	cmd.Env = append(os.Environ(), "NENYA_SECRETS_DIR="+secretsDir)
+	cmd := exec.CommandContext(ctx, binPath, "-config", filepath.Join(configDir, "config.json"))
+	cmd.Env = append(os.Environ(), "NENYA_SECRETS_DIR="+configDir)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	if err := cmd.Start(); err != nil {
@@ -127,40 +116,19 @@ func TestGoldenPathAgainstLatestRelease(t *testing.T) {
 	waitForHealthz(t, ctx, baseURL, logPath)
 
 	// Authenticated surface: the model catalog.
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/models", nil)
-	req.Header.Set("Authorization", "Bearer nk-e2e-test")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("GET /v1/models: %v", err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /v1/models = %s, want 200", resp.Status)
-	}
+	doAuthGET(t, ctx, baseURL+"/v1/models", token, logPath)
 
 	// Golden path: a streamed chat completion through the mock upstream.
-	body := `{"model":"e2e","messages":[{"role":"user","content":"hi"}],"stream":true}`
-	req, _ = http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/v1/chat/completions", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer nk-e2e-test")
-	req.Header.Set("Content-Type", "application/json")
-	resp, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("POST /v1/chat/completions: %v", err)
+	status, streamed := doStream(t, ctx, baseURL+"/v1/chat/completions", token)
+	if status != http.StatusOK {
+		t.Fatalf("POST /v1/chat/completions = %d, want 200\n%s", status, tailFile(logPath))
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("POST /v1/chat/completions = %s, want 200", resp.Status)
-	}
-	streamed, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		t.Fatalf("read stream: %v", err)
-	}
-	if !bytes.Contains(streamed, []byte("hello-e2e")) {
+	if !strings.Contains(streamed, "hello-e2e") {
 		t.Fatalf("stream did not contain the upstream content:\n%s", streamed)
 	}
 
-	// Feature-detect the target contract surface; assert version when present.
-	assertContractVersion(ctx, t, binPath)
+	// Feature-detect the contract version (vacuous on pre-contract releases).
+	assertContractVersion(ctx, t, binPath, configDir, logPath)
 
 	// Graceful shutdown per CONTRACT.md §8.3.
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
@@ -176,104 +144,104 @@ func TestGoldenPathAgainstLatestRelease(t *testing.T) {
 	}
 }
 
-// downloadAndExtract downloads the release archive + checksums, verifies the
-// SHA-256, extracts the `nenya` member to binPath, and returns all member names.
-func downloadAndExtract(ctx context.Context, tag, version, binPath string) ([]string, error) {
-	base := fmt.Sprintf("https://github.com/%s/%s/releases/download/%s/", owner, repo, tag)
-	archiveName := fmt.Sprintf("nenya_%s_%s_%s.tar.gz", version, runtime.GOOS, runtime.GOARCH)
-
-	archive, err := httpGet(ctx, base+archiveName)
-	if err != nil {
-		return nil, fmt.Errorf("download %s: %w", archiveName, err)
-	}
-	checksums, err := httpGet(ctx, base+"checksums.txt")
-	if err != nil {
-		return nil, fmt.Errorf("download checksums.txt: %w", err)
-	}
-
-	want := ""
-	for _, line := range strings.Split(string(checksums), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[1] == archiveName {
-			want = strings.ToLower(fields[0])
+// mockUpstream is an OpenAI-compatible SSE endpoint that asserts the request
+// shape so a nenya regression (wrong method/path/body) fails the test.
+func mockUpstream() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" {
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
 		}
-	}
-	if want == "" {
-		return nil, fmt.Errorf("checksums.txt has no entry for %s", archiveName)
-	}
-	sum := sha256.Sum256(archive)
-	if got := hex.EncodeToString(sum[:]); got != want {
-		return nil, fmt.Errorf("checksum mismatch for %s: want %s got %s", archiveName, want, got)
-	}
-
-	gz, err := gzip.NewReader(bytes.NewReader(archive))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = gz.Close() }()
-
-	var members []string
-	tr := tar.NewReader(gz)
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
+		var body struct {
+			Model  string `json:"model"`
+			Stream bool   `json:"stream"`
 		}
-		if err != nil {
-			return nil, err
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad body", http.StatusBadRequest)
+			return
 		}
-		members = append(members, hdr.Name)
-		if hdr.Name != "nenya" {
-			continue
-		}
-		out, err := os.OpenFile(binPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
-		if err != nil {
-			return nil, err
-		}
-		if _, err := io.Copy(out, tr); err != nil {
-			_ = out.Close()
-			return nil, err
-		}
-		if err := out.Close(); err != nil {
-			return nil, err
-		}
-	}
-	return members, nil
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello-e2e\"}}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	})
 }
 
-// assertArchiveLayout enforces the CONTRACT.md §7.1 member set.
-func assertArchiveLayout(t *testing.T, members []string) {
+func writeConfig(t *testing.T, path, listen, upstreamURL string) {
 	t.Helper()
-	has := func(name string) bool {
-		for _, m := range members {
-			if m == name {
-				return true
-			}
-		}
-		return false
-	}
-	if !has("nenya") {
-		t.Errorf("archive is missing the nenya member; got %v", members)
-	}
-	switch runtime.GOOS {
-	case "linux":
-		for _, m := range []string{"deploy/nenya.service", "deploy/nenya.socket"} {
-			if !has(m) {
-				t.Errorf("archive is missing %s; got %v", m, members)
-			}
-		}
-	case "darwin":
-		if !has("deploy/nenya.plist") {
-			t.Errorf("archive is missing deploy/nenya.plist; got %v", members)
-		}
+	config := fmt.Sprintf(`{
+  "server": {"listen_addr": %q},
+  "discovery": {"enabled": false},
+  "providers": {"mock": {"url": %q, "auth_style": "none"}},
+  "agents": {"e2e": {"strategy": "fallback", "models": [{"provider": "mock", "model": "e2e-model", "max_context": 8192}]}}
+}`, listen, upstreamURL)
+	if err := os.WriteFile(path, []byte(config), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
-// assertContractVersion feature-detects `nenya describe --json`; once it ships,
-// the reported contract_version must be within nenyactl's supported range.
-func assertContractVersion(ctx context.Context, t *testing.T, binPath string) {
+func readClientToken(t *testing.T, path string) string {
 	t.Helper()
-	out, err := exec.CommandContext(ctx, binPath, "describe", "--json").Output()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s struct {
+		ClientToken string `json:"client_token"`
+	}
+	if err := json.Unmarshal(data, &s); err != nil {
+		t.Fatalf("parse secrets: %v", err)
+	}
+	if s.ClientToken == "" {
+		t.Fatal("install generated an empty client_token")
+	}
+	return s.ClientToken
+}
+
+func doAuthGET(t *testing.T, ctx context.Context, url, token, logPath string) {
+	t.Helper()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s = %s, want 200\n%s", url, resp.Status, tailFile(logPath))
+	}
+}
+
+func doStream(t *testing.T, ctx context.Context, url, token string) (int, string) {
+	t.Helper()
+	body := `{"model":"e2e","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	out, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		t.Fatalf("read stream: %v", err)
+	}
+	return resp.StatusCode, string(out)
+}
+
+// assertContractVersion probes `nenya describe --json` with a bounded timeout
+// so an older binary ignores the command instead of starting a server. It is
+// vacuous on releases that predate the command and enforces the range once it
+// ships.
+func assertContractVersion(ctx context.Context, t *testing.T, binPath, configDir, logPath string) {
+	t.Helper()
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(probeCtx, binPath, "describe", "--json")
+	cmd.Env = append(os.Environ(), "NENYA_SECRETS_DIR="+configDir)
+	out, err := cmd.Output()
 	if err != nil {
 		t.Logf("describe --json not available yet (contract target): %v", err)
 		return
@@ -282,7 +250,7 @@ func assertContractVersion(ctx context.Context, t *testing.T, binPath string) {
 		ContractVersion int `json:"contract_version"`
 	}
 	if err := json.Unmarshal(out, &described); err != nil {
-		t.Fatalf("describe --json returned unparseable JSON: %v", err)
+		t.Fatalf("describe --json returned unparseable JSON: %v\n%s", err, tailFile(logPath))
 	}
 	if err := contract.Check(described.ContractVersion); err != nil {
 		t.Fatalf("contract mismatch: %v", err)
@@ -290,14 +258,26 @@ func assertContractVersion(ctx context.Context, t *testing.T, binPath string) {
 }
 
 func latestTag(ctx context.Context) (string, error) {
-	body, err := httpGet(ctx, fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", owner, repo))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", owner, repo), nil)
 	if err != nil {
 		return "", err
+	}
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status %s", resp.Status)
 	}
 	var rel struct {
 		TagName string `json:"tag_name"`
 	}
-	if err := json.Unmarshal(body, &rel); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
 		return "", err
 	}
 	if rel.TagName == "" {
@@ -306,28 +286,15 @@ func latestTag(ctx context.Context) (string, error) {
 	return rel.TagName, nil
 }
 
-func httpGet(ctx context.Context, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %s for %s", resp.Status, url)
-	}
-	return io.ReadAll(resp.Body)
-}
-
 func waitForHealthz(t *testing.T, ctx context.Context, baseURL, logPath string) {
 	t.Helper()
+	client := &http.Client{Timeout: 3 * time.Second}
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/healthz", nil)
-		resp, err := http.DefaultClient.Do(req)
+		reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		req, _ := http.NewRequestWithContext(reqCtx, http.MethodGet, baseURL+"/healthz", nil)
+		resp, err := client.Do(req)
+		cancel()
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {

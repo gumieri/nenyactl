@@ -34,11 +34,11 @@ install -m 755 nenyactl /usr/local/bin/   # or ~/.local/bin
 
 ```bash
 # Linux amd64
-curl -fsSL https://github.com/gumieri/nenyactl/releases/latest/download/nenyactl_<version>_linux_amd64.tar.gz | tar -xz
+curl -fsSL https://github.com/gumieri/nenyactl/releases/latest/download/nenyactl_0.1.0_linux_amd64.tar.gz | tar -xz
 sudo install -m 755 nenyactl /usr/bin/
 
 # macOS arm64
-curl -fsSL https://github.com/gumieri/nenyactl/releases/latest/download/nenyactl_<version>_darwin_arm64.tar.gz | tar -xz
+curl -fsSL https://github.com/gumieri/nenyactl/releases/latest/download/nenyactl_0.1.0_darwin_arm64.tar.gz | tar -xz
 sudo install -m 755 nenyactl /usr/bin/
 ```
 
@@ -57,7 +57,7 @@ yay -S nenyactl-bin
 ### Nix / NixOS — after first release
 
 ```bash
-nix-env -iA gumieri.nenyactl
+nix-env -iA nur.repos.gumieri.nenyactl
 ```
 
 ### System packages (Linux) — after first release
@@ -235,7 +235,7 @@ go build -o bin/nenyactl ./cmd/nenyactl/
 go test ./... -count=1
 
 # Full verification line
-gofmt -l . && go vet ./... && golangci-lint run ./... && go mod tidy && git diff --exit-code go.mod go.sum
+test -z "$(gofmt -l .)" && go vet ./... && golangci-lint run ./... && go test ./... -count=1 && go mod tidy && git diff --exit-code go.mod go.sum
 
 # Lint
 golangci-lint run ./...

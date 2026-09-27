@@ -6,10 +6,8 @@ import (
 )
 
 func TestCheck(t *testing.T) {
-	for _, v := range []int{1} {
-		if err := Check(v); err != nil {
-			t.Errorf("Check(%d) unexpected error: %v", v, err)
-		}
+	if err := Check(1); err != nil {
+		t.Errorf("Check(1) unexpected error: %v", err)
 	}
 	for _, v := range []int{0, 2, 99} {
 		err := Check(v)
@@ -23,7 +21,10 @@ func TestCheck(t *testing.T) {
 }
 
 func TestRange(t *testing.T) {
-	if got := Range(); got != "[1,1]" {
-		t.Errorf("Range() = %q, want [1,1]", got)
+	if got, want := Range(), "1..1"; got != want {
+		t.Errorf("Range() = %q, want %q", got, want)
+	}
+	if !strings.Contains(Check(99).Error(), Range()) {
+		t.Error("Check message should include Range()")
 	}
 }

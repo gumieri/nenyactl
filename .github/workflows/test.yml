@@ -5,6 +5,8 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  # Manual trigger for the network E2E job below.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -101,6 +103,10 @@ jobs:
 
   e2e:
     name: E2E (real latest nenya release)
+    # Network E2E against a live release: nightly and on demand, not on every
+    # push (see the Seam E2E workflow). Kept here for manual runs via
+    # 'workflow_dispatch' from the Actions tab.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -114,9 +120,6 @@ jobs:
 
       - name: Download dependencies
         run: go mod download
-
-      - name: Build nenyactl
-        run: go build -o bin/nenyactl ./cmd/nenyactl/
 
       - name: Golden-path E2E against the real latest nenya release
         env:

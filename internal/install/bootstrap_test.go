@@ -305,3 +305,51 @@ func TestInstallUserWritesNoSystemUnits(t *testing.T) {
 		t.Errorf("user config is not valid JSON: %v (%s)", err, data)
 	}
 }
+
+func TestCheckInstalledContract(t *testing.T) {
+	t.Run("fails closed on an unsupported contract", func(t *testing.T) {
+		var calls []string
+		dest := "/bin/nenya"
+		runner := multiRunner{scriptRunner{
+			outputs: map[string]string{dest + " describe --json": `{"contract_version": 99}`},
+			calls:   &calls,
+		}}
+		err := checkInstalledContract(context.Background(), runner, dest)
+		if err == nil || !strings.Contains(err.Error(), "contract_version") {
+			t.Fatalf("expected contract error, got %v", err)
+		}
+	})
+
+	t.Run("accepts a supported contract", func(t *testing.T) {
+		var calls []string
+		dest := "/bin/nenya"
+		runner := multiRunner{scriptRunner{
+			outputs: map[string]string{dest + " describe --json": `{"contract_version": 1}`},
+			calls:   &calls,
+		}}
+		if err := checkInstalledContract(context.Background(), runner, dest); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("feature-detects through version --json", func(t *testing.T) {
+		var calls []string
+		dest := "/bin/nenya"
+		runner := multiRunner{scriptRunner{
+			outputs: map[string]string{dest + " version --json": `{"version":"0.15.0","contract_version":1}`},
+			calls:   &calls,
+		}}
+		if err := checkInstalledContract(context.Background(), runner, dest); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("no version surface is accepted", func(t *testing.T) {
+		var calls []string
+		dest := "/bin/nenya"
+		runner := multiRunner{scriptRunner{outputs: map[string]string{}, calls: &calls}}
+		if err := checkInstalledContract(context.Background(), runner, dest); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}

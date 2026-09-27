@@ -4,20 +4,23 @@ package contract
 
 import "fmt"
 
-// Supported is the inclusive [min, max] contract_version range this build
-// supports. Bump it when nenyactl adopts a newer contract.
-var Supported = [2]int{1, 1}
+// SupportedMin and SupportedMax bound the inclusive contract_version range this
+// build supports. Bump SupportedMax when nenyactl adopts a newer contract.
+const (
+	SupportedMin = 1
+	SupportedMax = 1
+)
 
-// Check returns an actionable error when v is outside Supported.
+// Check returns an actionable error when v is outside the supported range.
 func Check(v int) error {
-	if v < Supported[0] || v > Supported[1] {
-		return fmt.Errorf("nenya contract_version %d is not supported by this nenyactl build (supports %d..%d); update nenyactl or install a compatible nenya",
-			v, Supported[0], Supported[1])
+	if v < SupportedMin || v > SupportedMax {
+		return fmt.Errorf("nenya contract_version %d is not supported by this nenyactl build (supports %s); update nenyactl or install a compatible nenya",
+			v, Range())
 	}
 	return nil
 }
 
-// Range renders Supported as "[min,max]" for display.
+// Range renders the supported range for display.
 func Range() string {
-	return fmt.Sprintf("[%d,%d]", Supported[0], Supported[1])
+	return fmt.Sprintf("%d..%d", SupportedMin, SupportedMax)
 }
