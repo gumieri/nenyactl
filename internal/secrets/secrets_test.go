@@ -1,6 +1,8 @@
 package secrets
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -53,5 +55,87 @@ func TestGenerateAPIKeyUniqueness(t *testing.T) {
 			t.Errorf("duplicate API key generated: %q", key)
 		}
 		seen[key] = true
+	}
+}
+
+func TestExistingTokenFile(t *testing.T) {
+	t.Run("empty dir", func(t *testing.T) {
+		if got := ExistingTokenFile(t.TempDir()); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+
+	t.Run("missing dir", func(t *testing.T) {
+		if got := ExistingTokenFile("/nonexistent/secrets"); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+
+	t.Run("empty dir argument", func(t *testing.T) {
+		if got := ExistingTokenFile(""); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+
+	t.Run("secrets.json", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "secrets.json", `{"client_token":"nk-a"}`)
+		if got := ExistingTokenFile(dir); got != filepath.Join(dir, "secrets.json") {
+			t.Errorf("got %q", got)
+		}
+	})
+
+	t.Run("single secrets file", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "secrets", `{"client_token":"nk-b"}`)
+		if got := ExistingTokenFile(dir); got != filepath.Join(dir, "secrets") {
+			t.Errorf("got %q", got)
+		}
+	})
+
+	t.Run("arbitrary json drop-in", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "01-client.json", `{"client_token":"nk-c"}`)
+		if got := ExistingTokenFile(dir); got != filepath.Join(dir, "01-client.json") {
+			t.Errorf("got %q", got)
+		}
+	})
+
+	t.Run("json without a token is ignored", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "providers.json", `{"provider_keys":{}}`)
+		if got := ExistingTokenFile(dir); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+
+	t.Run("unparseable file is ignored", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "secrets.json", `not json`)
+		if got := ExistingTokenFile(dir); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+}
+
+func TestHasClientToken(t *testing.T) {
+	if !HasClientToken([]byte(`{"client_token":"nk-x"}`)) {
+		t.Error("expected true for a token")
+	}
+	if HasClientToken([]byte(`{"client_token":""}`)) {
+		t.Error("expected false for an empty token")
+	}
+	if HasClientToken([]byte(`{"other":1}`)) {
+		t.Error("expected false without a token")
+	}
+	if HasClientToken([]byte(`not json`)) {
+		t.Error("expected false for unparseable data")
+	}
+}
+
+func writeFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
