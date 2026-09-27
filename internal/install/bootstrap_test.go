@@ -236,3 +236,59 @@ func (m multiRunner) Output(ctx context.Context, name string, args ...string) ([
 	}
 	return []byte("ok"), nil
 }
+
+func TestInstallUserWritesNoSystemUnits(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("user install path differs on windows")
+	}
+
+	archive := containTarGz(t, map[string]string{
+		"nenya":                "fake-binary-content",
+		"deploy/nenya.service": "[Unit]\nDescription=nenya",
+		"deploy/nenya.socket":  "[Socket]\nListenStream=8080",
+	})
+	server := releaseServer(t, archive, "v0.0.0-test")
+	defer server.Close()
+	pointAtServer(t, server)
+
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", "")
+
+	trapUnit := filepath.Join(tmp, "trap-systemd")
+	trapConfig := filepath.Join(tmp, "trap-etc")
+	savedUnit, savedConfig := systemUnitDir, systemConfigDir
+	systemUnitDir = func() string { return trapUnit }
+	systemConfigDir = func() string { return trapConfig }
+	t.Cleanup(func() { systemUnitDir, systemConfigDir = savedUnit, savedConfig })
+
+	var calls []string
+	runner := multiRunner{scriptRunner{calls: &calls}}
+
+	cfg := Config{Version: "v0.0.0-test", UserInstall: true, SkipVerify: true}
+	if err := InstallWithHTTPAndRunner(context.Background(), cfg, server.Client(), runner); err != nil {
+		t.Fatalf("user install: %v", err)
+	}
+
+	if entries, err := os.ReadDir(trapUnit); err == nil && len(entries) != 0 {
+		t.Errorf("user install wrote system units: %v", entries)
+	}
+	if _, err := os.Stat(trapConfig); !os.IsNotExist(err) {
+		t.Errorf("user install touched system config dir %s", trapConfig)
+	}
+	for _, c := range calls {
+		if strings.HasPrefix(c, "systemctl") || strings.HasPrefix(c, "launchctl") {
+			t.Errorf("user install invoked a system service manager: %s", c)
+		}
+	}
+
+	for _, f := range []string{
+		filepath.Join(tmp, ".local", "bin", "nenya"),
+		filepath.Join(tmp, ".config", "nenya", "config.json"),
+		filepath.Join(tmp, ".config", "nenya", "secrets.json"),
+	} {
+		if _, err := os.Stat(f); err != nil {
+			t.Errorf("expected user artifact %s: %v", f, err)
+		}
+	}
+}
