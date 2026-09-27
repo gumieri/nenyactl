@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,23 @@ import (
 )
 
 func TestResolvedEndpoint(t *testing.T) {
+	// contractDispatch makes the recording runner answer per command: describe
+	// returns describeJSON, paths errors (local fallback), and secret get
+	// returns tokenJSON (empty token falls back to the file shim).
+	contractDispatch := func(rr *recordingRunner, describeJSON, tokenJSON string) {
+		rr.rec.onCall = func(args []string) {
+			rr.err = nil
+			switch args[0] {
+			case "describe":
+				rr.out = []byte(describeJSON)
+			case "paths":
+				rr.err = errors.New("nenya paths: unknown command")
+			case "secret":
+				rr.out = []byte(tokenJSON)
+			}
+		}
+	}
+
 	t.Run("reads the published port and token from a container dir", func(t *testing.T) {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, "compose.yml"), []byte("services:\n  nenya:\n    ports:\n      - \"127.0.0.1:9090:8080\"\n"), 0o644); err != nil {
@@ -86,7 +104,7 @@ func TestResolvedEndpoint(t *testing.T) {
 		}
 
 		rr := newRecordingRunner()
-		rr.out = []byte(`{"contract_version":1,"config":{"server":{"listen_addr":":8080"}}}`)
+		contractDispatch(rr, `{"contract_version":1,"config":{"server":{"listen_addr":":8080"}}}`, "")
 		fakeContract(t, rr)
 
 		res, err := resolveDir(dir, dirAttach, false)
@@ -97,11 +115,41 @@ func TestResolvedEndpoint(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// secret get is unavailable (contractDispatch errors it), so the token
+		// comes from the documented file shim.
 		if ep.Token != "nk-bare" {
 			t.Errorf("Token = %s", ep.Token)
 		}
 		if ep.BaseURL != "http://localhost:8080" {
 			t.Errorf("BaseURL = %s", ep.BaseURL)
+		}
+	})
+
+	t.Run("bare-metal reads the token through nenya secret get when available", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// A stale file exists, but the contract's answer is authoritative and
+		// different: the file shim must not win.
+		if err := os.WriteFile(filepath.Join(dir, "secrets.json"), []byte(`{"client_token":"nk-stale"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		rr := newRecordingRunner()
+		contractDispatch(rr, `{"contract_version":1,"config":{"server":{"listen_addr":":8080"}}}`, "nk-contract")
+		fakeContract(t, rr)
+
+		res, err := resolveDir(dir, dirAttach, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ep, err := resolvedEndpoint(context.Background(), res)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ep.Token != "nk-contract" {
+			t.Errorf("Token = %s, want the contract-resolved token", ep.Token)
 		}
 	})
 
@@ -117,7 +165,7 @@ func TestResolvedEndpoint(t *testing.T) {
 		}
 
 		rr := newRecordingRunner()
-		rr.out = []byte(`{"contract_version":1,"config":{"server":{"listen_addr":":9090"}}}`)
+		contractDispatch(rr, `{"contract_version":1,"config":{"server":{"listen_addr":":9090"}}}`, "nk-contract")
 		fakeContract(t, rr)
 
 		res, err := resolveDir(dir, dirAttach, false)
@@ -139,7 +187,7 @@ func TestResolvedEndpoint(t *testing.T) {
 			t.Fatal(err)
 		}
 		rr := newRecordingRunner()
-		rr.out = []byte(`{"contract_version":1,"config":{"server":{"listen_addr":":8080"}}}`)
+		contractDispatch(rr, `{"contract_version":1,"config":{"server":{"listen_addr":":8080"}}}`, "")
 		fakeContract(t, rr)
 
 		res, err := resolveDir(dir, dirAttach, false)

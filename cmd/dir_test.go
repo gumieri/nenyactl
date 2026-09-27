@@ -144,8 +144,8 @@ func TestResolveDir(t *testing.T) {
 		if res.ConfigDir() != filepath.Join(containerDir, "config") {
 			t.Errorf("ConfigDir = %s, want <root>/config", res.ConfigDir())
 		}
-		if res.Info.SecretsFile() != filepath.Join(containerDir, "secrets", "01-client.json") {
-			t.Errorf("SecretsFile = %s", res.Info.SecretsFile())
+		if res.Info.SecretsDir() != filepath.Join(containerDir, "secrets") {
+			t.Errorf("SecretsDir = %s", res.Info.SecretsDir())
 		}
 	})
 
@@ -201,16 +201,13 @@ func TestResolveDir(t *testing.T) {
 	})
 }
 
-func TestInfoSecretsFile(t *testing.T) {
-	bare := &detect.Info{Mode: detect.ModeBareMetal, ConfigFile: "/etc/nenya/config.json"}
-	if got := bare.SecretsFile(); got != "/etc/nenya/secrets.json" {
-		t.Errorf("bare-metal SecretsFile = %s", got)
-	}
+func TestInfoSecretsDir(t *testing.T) {
 	container := &detect.Info{Mode: detect.ModeContainer, DataDir: "/data/nenya", ConfigFile: "/data/nenya/config/config.json"}
-	if got := container.SecretsFile(); got != "/data/nenya/secrets/01-client.json" {
-		t.Errorf("container SecretsFile = %s", got)
-	}
 	if got := container.SecretsDir(); got != "/data/nenya/secrets" {
 		t.Errorf("container SecretsDir = %s", got)
+	}
+	bare := &detect.Info{Mode: detect.ModeBareMetal, ConfigFile: "/etc/nenya/config.json"}
+	if got := bare.SecretsDir(); got != "/etc/nenya" {
+		t.Errorf("bare-metal SecretsDir = %s", got)
 	}
 }

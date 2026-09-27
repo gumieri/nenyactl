@@ -87,6 +87,38 @@ func TestClientPathsParsesAndTargets(t *testing.T) {
 	}
 }
 
+func TestSecretGetReadsValue(t *testing.T) {
+	fr := &fakeRunner{out: []byte("nk-abc123\n")}
+	tok, err := New(fr).WithConfigDir("/etc/nenya").SecretGet(context.Background(), "client-token")
+	if err != nil {
+		t.Fatalf("SecretGet: %v", err)
+	}
+	if tok != "nk-abc123" {
+		t.Errorf("token = %q", tok)
+	}
+	want := []string{"secret", "get", "--client-token", "--config-dir", "/etc/nenya"}
+	if !equalArgs(fr.args, want) {
+		t.Errorf("args = %v, want %v", fr.args, want)
+	}
+
+	// A provider selector passes --provider; the value is trimmed.
+	fr2 := &fakeRunner{out: []byte("sk-p\n")}
+	if _, err := New(fr2).SecretGet(context.Background(), "anthropic"); err != nil {
+		t.Fatalf("SecretGet(provider): %v", err)
+	}
+	if !equalArgs(fr2.args, []string{"secret", "get", "--provider", "anthropic"}) {
+		t.Errorf("args = %v", fr2.args)
+	}
+
+	// A failure carries the exit status but never stderr (which could echo a
+	// value); the runner's error contains no secret material here, and the
+	// wrapping must not add any captured output.
+	_, err = New(&fakeRunner{err: errors.New("exit status 1")}).SecretGet(context.Background(), "client-token")
+	if err == nil || !strings.Contains(err.Error(), "secret get") {
+		t.Errorf("err = %v, want a secret get wrapper", err)
+	}
+}
+
 func TestDescribeParsesEffectiveState(t *testing.T) {
 	fr := &fakeRunner{out: []byte(describeJSON)}
 	c := New(fr).WithConfigDir("/tmp/cfg")

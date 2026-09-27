@@ -13,7 +13,6 @@ import (
 	"github.com/gumieri/nenyactl/internal/detect"
 	"github.com/gumieri/nenyactl/internal/install"
 	"github.com/gumieri/nenyactl/internal/nenya"
-	"github.com/gumieri/nenyactl/internal/secrets"
 	"github.com/spf13/cobra"
 )
 
@@ -126,7 +125,7 @@ func diagnose(ctx context.Context, res dirResolution, doer healthDoer) []checkRe
 
 	return []checkResult{
 		checkConfig(res, descErr, haveDesc),
-		checkSecrets(res, desc, haveDesc),
+		checkSecrets(ctx, res, desc, haveDesc),
 		checkContract(desc, descErr),
 		checkProviders(desc, descErr),
 		checkPort(ctx, doer, res, desc, haveDesc),
@@ -175,7 +174,7 @@ func configAddonDirs(res dirResolution) []string {
 	return files
 }
 
-func checkSecrets(res dirResolution, desc nenya.Description, haveDesc bool) checkResult {
+func checkSecrets(ctx context.Context, res dirResolution, desc nenya.Description, haveDesc bool) checkResult {
 	dir := res.Info.SecretsDir()
 	if dir == "" {
 		return checkResult{Name: "secrets", Status: checkFail, Detail: "cannot resolve the secrets directory"}
@@ -187,11 +186,21 @@ func checkSecrets(res dirResolution, desc nenya.Description, haveDesc bool) chec
 		return checkResult{Name: "secrets", Status: checkOK, Detail: "systemd credential source: " + desc.Secrets.ActiveSource}
 	}
 
-	if secrets.ExistingTokenFile(dir) == "" {
+	// Token presence through nenya's single reader first (§4.8): it resolves
+	// the deployment's real source order, which a directory guess cannot. The
+	// file shim covers released binaries without `secret get`.
+	token, viaContract := clientToken(ctx, res)
+	if token == "" {
 		return checkResult{Name: "secrets", Status: checkFail, Detail: "no client token in " + dir, Fix: "run `nenyactl up`"}
 	}
 
-	// Check permissions on every secrets file, not just the token-bearing one.
+	detail := fmt.Sprintf("client token resolves (%s)", dir)
+	if viaContract {
+		detail = "client token resolves via nenya secret get"
+	}
+
+	// Check permissions on every secrets file we can see, not just the
+	// token-bearing one; a credential-dir token has no local file to check.
 	files := secretFilesIn(dir, res.Info.ConfigFile)
 	var loose, looseModes []string
 	for _, f := range files {
@@ -203,7 +212,7 @@ func checkSecrets(res dirResolution, desc nenya.Description, haveDesc bool) chec
 	if len(loose) > 0 {
 		return checkResult{Name: "secrets", Status: checkFail, Detail: "world/group-readable: " + strings.Join(looseModes, ", "), Fix: "chmod 600 " + shellQuoteAll(loose)}
 	}
-	return checkResult{Name: "secrets", Status: checkOK, Detail: fmt.Sprintf("%d file(s) in %s", len(files), dir)}
+	return checkResult{Name: "secrets", Status: checkOK, Detail: detail}
 }
 
 // secretFilesIn returns every secrets file under dir (excluding the config file,

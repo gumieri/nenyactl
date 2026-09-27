@@ -152,8 +152,24 @@ func buildStatus(ctx context.Context, res dirResolution, doer healthDoer) string
 			fmt.Fprintf(&b, "Diagnostics: %d (run `nenyactl doctor`)\n", len(d.Diagnostics))
 		}
 	}
+	// The secrets location is the contract's answer, not ours: the effective
+	// source when describe resolved one (it names the winning file or
+	// directory, e.g. the systemd credential), else the preferred file from
+	// paths --json, else the resolved secrets dir. The bare-metal fallback
+	// label stays "Secrets dir" because only a directory is then known.
+	secretsLabel, secretsValue := "Secrets dir", secretsDir
+	if haveDesc {
+		switch {
+		case desc.Secrets.ActiveSource != "":
+			secretsLabel, secretsValue = "Secrets", desc.Secrets.ActiveSource
+		case desc.Paths.SecretsFile != nil && *desc.Paths.SecretsFile != "":
+			secretsLabel, secretsValue = "Secrets", *desc.Paths.SecretsFile
+		case desc.Paths.SecretsDir != "":
+			secretsValue = desc.Paths.SecretsDir
+		}
+	}
 	fmt.Fprintf(&b, "Config dir:  %s\n", configDir)
-	fmt.Fprintf(&b, "Secrets dir: %s\n", secretsDir)
+	fmt.Fprintf(&b, "%s:%s%s\n", secretsLabel, strings.Repeat(" ", max(1, 12-len(secretsLabel))), secretsValue)
 	port := statusPort(res, desc, haveDesc)
 	if port == "" {
 		fmt.Fprintf(&b, "Port:        unknown\n")

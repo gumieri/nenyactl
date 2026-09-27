@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/gumieri/nenyactl/internal/clients"
-	"github.com/gumieri/nenyactl/internal/containers"
 	"github.com/spf13/cobra"
 )
 
@@ -127,7 +126,7 @@ func resolvedEndpoint(ctx context.Context, res dirResolution) (clients.Endpoint,
 	}
 	base := "http://localhost:" + port
 
-	token := containers.ClientToken(res.Path)
+	token, _ := clientToken(ctx, res)
 	if token == "" {
 		return clients.Endpoint{}, fmt.Errorf("no client token found for %s; create one with 'nenyactl secret bootstrap --dir %s'", res.Path, res.Path)
 	}

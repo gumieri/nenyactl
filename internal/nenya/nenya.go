@@ -265,6 +265,27 @@ func (c *Client) Describe(ctx context.Context) (Description, error) {
 	return d, nil
 }
 
+// SecretGet reads a secret through nenya's single reader (CONTRACT.md §4.8):
+// selector "client-token" reads the effective client_token, any other value is
+// a provider name. The value is returned trimmed, from stdout only; the error
+// wraps the exit status without stderr, so the secret is never echoed. Released
+// binaries without the command fail here — callers feature-detect by falling
+// back to their documented file shim.
+func (c *Client) SecretGet(ctx context.Context, selector string) (string, error) {
+	args := []string{"secret", "get"}
+	if selector == "client-token" {
+		args = append(args, "--client-token")
+	} else {
+		args = append(args, "--provider", selector)
+	}
+	args = append(args, c.target()...)
+	out, err := runBounded(ctx, c.runner, probeTimeout, args...)
+	if err != nil {
+		return "", fmt.Errorf("nenya secret get: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // SetConfig sets a dotted config key through nenya's single writer. The value is
 // passed verbatim; nenya parses it as JSON when valid, else as a string. It
 // returns the target path nenya reports on stdout.

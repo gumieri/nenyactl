@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/gumieri/nenyactl/internal/containers"
 	secrets "github.com/gumieri/nenyactl/internal/secrets"
 	"github.com/spf13/cobra"
 )
@@ -141,6 +143,23 @@ func init() {
 	secretCmd.AddCommand(secretSetCmd)
 	secretSetCmd.Flags().StringVar(&secretSetDir, "dir", "", "Config root or container directory (default: system config root)")
 	secretSetCmd.Flags().StringVar(&secretSetProvider, "provider", "", "Provider name whose key is set (required)")
+}
+
+// clientToken resolves the deployment's effective client token. Bare-metal
+// reads it through nenya's single reader (`nenya secret get --client-token`,
+// CONTRACT.md §4.8), so the §6.1 source precedence is nenya's, not ours;
+// released binaries without that command fall back to the documented file shim
+// over the deployment's secrets directory. Container deployments read the merge
+// directory the compose file mounts at /run/secrets/nenya. viaContract reports
+// that the token came from the contract rather than the shim.
+func clientToken(ctx context.Context, res dirResolution) (token string, viaContract bool) {
+	if res.Kind == dirContainerRoot {
+		return containers.ClientToken(res.Path), false
+	}
+	if tok, err := res.Contract().SecretGet(ctx, "client-token"); err == nil && tok != "" {
+		return tok, true
+	}
+	return secrets.ClientTokenInDir(res.Info.SecretsDir()), false
 }
 
 func runSecretSet(cmd *cobra.Command, args []string) error {

@@ -37,25 +37,12 @@ type Info struct {
 	DataDir    string
 }
 
-// SecretsFile returns the single secrets file for the deployment, matching what
-// the deployment actually loads. Container deployments read secrets/ (mounted as
-// /run/secrets/nenya by the generated compose), so the first client file is
-// returned; bare-metal uses <config-root>/secrets.json (the path wired into the
-// shipped systemd unit).
-func (i *Info) SecretsFile() string {
-	if i.Mode == ModeContainer {
-		if i.DataDir == "" {
-			return ""
-		}
-		return filepath.Join(i.DataDir, "secrets", "01-client.json")
-	}
-	if i.ConfigFile == "" {
-		return ""
-	}
-	return filepath.Join(filepath.Dir(i.ConfigFile), "secrets.json")
-}
-
-// SecretsDir returns the directory the deployment's secrets live in.
+// SecretsDir returns the directory the deployment's secrets live in: the
+// container merge directory (mounted at /run/secrets/nenya by the generated
+// compose) or the bare-metal config root. It is the directory nenyactl targets
+// `nenya secret set` at and scans for existing secrets; the effective
+// *location* a token resolves from is the contract's answer (`nenya secret
+// get`, `paths.secrets_file`, `describe.secrets.active_source`), not this.
 func (i *Info) SecretsDir() string {
 	if i.Mode == ModeContainer {
 		if i.DataDir == "" {

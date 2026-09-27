@@ -88,7 +88,7 @@ func TestDiagnoseFailures(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if r := checkSecrets(res, nenya.Description{}, false); r.Status != checkFail || r.Fix == "" {
+		if r := checkSecrets(context.Background(), res, nenya.Description{}, false); r.Status != checkFail || r.Fix == "" {
 			t.Errorf("got %+v, want a fail with a fix", r)
 		}
 	})
@@ -105,7 +105,7 @@ func TestDiagnoseFailures(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r := checkSecrets(res, nenya.Description{}, false)
+		r := checkSecrets(context.Background(), res, nenya.Description{}, false)
 		if r.Status != checkFail {
 			t.Errorf("got %+v, want fail for the loose file", r)
 		}
@@ -119,7 +119,7 @@ func TestDiagnoseFailures(t *testing.T) {
 		}
 		desc := nenya.Description{}
 		desc.Secrets.ActiveSource = "$CREDENTIALS_DIRECTORY/secrets"
-		if r := checkSecrets(res, desc, true); r.Status != checkOK {
+		if r := checkSecrets(context.Background(), res, desc, true); r.Status != checkOK {
 			t.Errorf("got %+v, want ok for a credential source", r)
 		}
 	})
