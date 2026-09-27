@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/gumieri/nenyactl/internal/detect"
+	"github.com/gumieri/nenyactl/internal/nenya"
 )
 
 func TestResolveDir(t *testing.T) {
@@ -34,6 +36,97 @@ func TestResolveDir(t *testing.T) {
 		}
 		if res.ConfigDir() != bareMetalDir {
 			t.Errorf("ConfigDir = %s", res.ConfigDir())
+		}
+	})
+
+	t.Run("--dir is refined through the paths contract", func(t *testing.T) {
+		saved := pathsProbe
+		pathsProbe = func(dir string) (*nenya.Paths, error) {
+			if dir != bareMetalDir {
+				t.Errorf("probe dir = %q, want %q", dir, bareMetalDir)
+			}
+			return &nenya.Paths{
+				Mode:       "directory",
+				ConfigDir:  bareMetalDir,
+				ConfigFile: filepath.Join(bareMetalDir, "config.json"),
+				ConfigD:    filepath.Join(bareMetalDir, "config.d"),
+				SecretsDir: "/run/secrets/nenya",
+			}, nil
+		}
+		t.Cleanup(func() { pathsProbe = saved })
+
+		res, err := resolveDir(bareMetalDir, dirAttach, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cp := res.ContractPaths()
+		if cp == nil {
+			t.Fatal("ContractPaths = nil, want the resolved contract")
+		}
+		if cp.ConfigFile != filepath.Join(bareMetalDir, "config.json") {
+			t.Errorf("ContractPaths.ConfigFile = %s", cp.ConfigFile)
+		}
+	})
+
+	t.Run("empty --dir takes the server-resolved root (honors NENYA_CONFIG_DIR)", func(t *testing.T) {
+		saved := pathsProbe
+		envRoot := filepath.Join(t.TempDir(), "env-root")
+		pathsProbe = func(dir string) (*nenya.Paths, error) {
+			if dir != "" {
+				t.Errorf("default resolution must not pin a config dir, got %q", dir)
+			}
+			return &nenya.Paths{
+				Mode:       "directory",
+				ConfigDir:  envRoot,
+				ConfigFile: filepath.Join(envRoot, "config.json"),
+				ConfigD:    filepath.Join(envRoot, "config.d"),
+			}, nil
+		}
+		t.Cleanup(func() { pathsProbe = saved })
+
+		res, err := resolveDir("", dirAttach, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Path != envRoot {
+			t.Errorf("Path = %s, want the §3.3-resolved %s", res.Path, envRoot)
+		}
+		if res.Info.ConfigFile != filepath.Join(envRoot, "config.json") {
+			t.Errorf("ConfigFile = %s", res.Info.ConfigFile)
+		}
+	})
+
+	t.Run("a failed probe falls back to the local layout", func(t *testing.T) {
+		saved := pathsProbe
+		pathsProbe = func(dir string) (*nenya.Paths, error) { return nil, errors.New("nenya paths: unknown command") }
+		t.Cleanup(func() { pathsProbe = saved })
+
+		res, err := resolveDir(bareMetalDir, dirAttach, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.ContractPaths() != nil {
+			t.Errorf("ContractPaths = %+v, want nil after a failed probe", res.ContractPaths())
+		}
+		if res.Info.ConfigFile != filepath.Join(bareMetalDir, "config.json") {
+			t.Errorf("ConfigFile = %s, want the local structural layout", res.Info.ConfigFile)
+		}
+	})
+
+	t.Run("container roots are never probed", func(t *testing.T) {
+		saved := pathsProbe
+		pathsProbe = func(dir string) (*nenya.Paths, error) {
+			t.Error("container resolution must not call the contract")
+			return nil, errors.New("should not be called")
+		}
+		t.Cleanup(func() { pathsProbe = saved })
+
+		res, err := resolveDir(containerDir, dirAttach, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.ContractPaths() != nil {
+			t.Errorf("ContractPaths = %+v, want nil for a container", res.ContractPaths())
 		}
 	})
 

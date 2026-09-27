@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -41,6 +42,56 @@ type dirResolution struct {
 	Kind dirKind
 	// Info holds the resolved config/secrets/unit paths for the deployment.
 	Info *detect.Info
+	// cpaths holds the contract-resolved filesystem layout from
+	// `nenya paths --json`, or nil when it could not be resolved (container
+	// deployments, or a nenya without the command — see refineWithPaths).
+	cpaths *nenya.Paths
+}
+
+// ContractPaths returns the deployment's resolved filesystem contract from
+// `nenya paths --json` (CONTRACT.md §4.2), or nil when it could not be
+// resolved. Consumers MUST treat nil as "unknown", never as a reason to
+// reconstruct the resolution themselves.
+func (r dirResolution) ContractPaths() *nenya.Paths { return r.cpaths }
+
+// pathsProbe resolves the deployment's filesystem contract through
+// `nenya paths --json`. A non-empty dir is passed as --config-dir; an empty
+// dir means no target flags, so nenya applies §3.3 itself (NENYA_CONFIG_DIR /
+// NENYA_CONFIG_FILE, then the platform default). Package var so tests can
+// inject a fake without a nenya binary.
+var pathsProbe = func(dir string) (*nenya.Paths, error) {
+	p, err := newContractClient(dir).Paths(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// refineWithPaths overlays `nenya paths --json` onto a resolved bare-metal
+// config root. nenya resolves the same flags and environment as the server
+// (§4.2), so the contract answer wins over the local structural layout: it
+// honors NENYA_CONFIG_DIR / NENYA_CONFIG_FILE and tracks nenya's resolution
+// without nenyactl re-deriving it (the boundary rule). A failed probe — binary
+// absent, or a released nenya without the command — keeps the local layout,
+// the documented shim; for the default root it says so on stderr rather than
+// silently ignoring the §3.3 environment. An explicit --dir needs no note: the
+// local layout for that directory is what paths --config-dir would report.
+func refineWithPaths(res dirResolution, dir string) dirResolution {
+	if res.Kind != dirConfigRoot {
+		return res
+	}
+	p, err := pathsProbe(dir)
+	if err != nil || p == nil || p.ConfigDir == "" || p.ConfigFile == "" {
+		if dir == "" {
+			fmt.Fprintln(os.Stderr, dimStyle.Render("  nenya paths --json unavailable; assuming the default config root"))
+		}
+		return res
+	}
+	res.Path = p.ConfigDir
+	res.Info.ConfigFile = p.ConfigFile
+	res.Info.ConfigD = p.ConfigD
+	res.cpaths = p
+	return res
 }
 
 // resolveDir interprets --dir for a command.
@@ -49,9 +100,10 @@ type dirResolution struct {
 //   - dirCreate accepts a missing path so create-oriented commands can make it.
 //
 // A container layout (config/config.json or compose.yml) resolves to the
-// nested container paths; anything else is treated as a bare-metal config root.
-// An empty --dir uses the supplied default root (system config root unless
-// defaultContainer is set).
+// nested container paths; anything else is treated as a bare-metal config root
+// and refined through `nenya paths --json`. An empty --dir uses the server's
+// own resolution (§3.3 environment) via the same command, falling back to the
+// system config root.
 func resolveDir(dir string, mode dirMode, defaultContainer bool) (dirResolution, error) {
 	if dir == "" {
 		if defaultContainer {
@@ -61,7 +113,7 @@ func resolveDir(dir string, mode dirMode, defaultContainer bool) (dirResolution,
 			}
 			return containerRoot(d), nil
 		}
-		return configRoot(paths.SystemConfigDir()), nil
+		return refineWithPaths(configRoot(paths.SystemConfigDir()), ""), nil
 	}
 
 	if mode == dirAttach {
@@ -73,7 +125,7 @@ func resolveDir(dir string, mode dirMode, defaultContainer bool) (dirResolution,
 	if detect.ModeForDir(dir) == detect.ModeContainer {
 		return containerRoot(dir), nil
 	}
-	return configRoot(dir), nil
+	return refineWithPaths(configRoot(dir), dir), nil
 }
 
 // ConfigDir is the directory that holds config.json/config.d for the resolved
@@ -123,7 +175,9 @@ func containerRoot(dir string) dirResolution {
 
 // detectedResolution converts an auto-detected install into a dirResolution.
 // The deployment root is the container data dir or the config file's directory,
-// never the config file itself.
+// never the config file itself. A bare-metal detection is refined through
+// `nenya paths --json` (the server's §3.3 resolution is authoritative for the
+// machine's install); containers are resolved locally.
 func detectedResolution(info *detect.Info) dirResolution {
 	root := filepath.Dir(info.ConfigFile)
 	kind := dirConfigRoot
@@ -133,5 +187,6 @@ func detectedResolution(info *detect.Info) dirResolution {
 			root = info.DataDir
 		}
 	}
-	return dirResolution{Path: root, Kind: kind, Info: info}
+	res := dirResolution{Path: root, Kind: kind, Info: info}
+	return refineWithPaths(res, "")
 }

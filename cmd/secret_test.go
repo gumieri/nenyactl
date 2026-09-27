@@ -143,12 +143,16 @@ func TestRunSecretBootstrap(t *testing.T) {
 		if *dir != tmp {
 			t.Errorf("contract pinned to %q, want %q", *dir, tmp)
 		}
-		if len(rr.rec.calls) != 1 {
-			t.Fatalf("got %d contract calls, want 1: %v", len(rr.rec.calls), rr.rec.calls)
+		if len(rr.rec.calls) != 2 {
+			t.Fatalf("got %d contract calls, want 2 (paths probe + write): %v", len(rr.rec.calls), rr.rec.calls)
+		}
+		pathsCall := []string{"paths", "--json", "--config-dir", tmp}
+		if strings.Join(rr.rec.calls[0], " ") != strings.Join(pathsCall, " ") {
+			t.Errorf("paths call = %v, want %v", rr.rec.calls[0], pathsCall)
 		}
 		want := []string{"secret", "set", "--client-token"}
-		if strings.Join(rr.rec.calls[0], " ") != strings.Join(want, " ") {
-			t.Errorf("call = %v, want %v", rr.rec.calls[0], want)
+		if strings.Join(rr.rec.calls[1], " ") != strings.Join(want, " ") {
+			t.Errorf("call = %v, want %v", rr.rec.calls[1], want)
 		}
 		if len(rr.rec.env) != 1 || rr.rec.env[0] != "NENYA_SECRETS_DIR="+tmp {
 			t.Errorf("env = %v, want NENYA_SECRETS_DIR=%s", rr.rec.env, tmp)
@@ -169,8 +173,9 @@ func TestRunSecretBootstrap(t *testing.T) {
 		if err := runSecretBootstrap(testCmd(), nil); err == nil {
 			t.Fatal("expected error for existing token")
 		}
-		if len(rr.rec.calls) != 0 {
-			t.Errorf("contract must not be called when a token exists: %v", rr.rec.calls)
+		// The paths probe runs as part of resolution; the write must not.
+		if len(rr.rec.calls) != 1 || rr.rec.calls[0][0] != "paths" {
+			t.Errorf("calls = %v, want only the paths probe when a token exists", rr.rec.calls)
 		}
 	})
 
@@ -217,8 +222,11 @@ func TestRunSecretSet(t *testing.T) {
 		t.Errorf("contract pinned to %q, want %q", *dir, tmp)
 	}
 	want := []string{"secret", "set", "--provider", "openai", "sk-test"}
-	if len(rr.rec.calls) != 1 || strings.Join(rr.rec.calls[0], " ") != strings.Join(want, " ") {
-		t.Errorf("calls = %v, want one call %v", rr.rec.calls, want)
+	if len(rr.rec.calls) != 2 {
+		t.Fatalf("calls = %v, want the paths probe plus one write %v", rr.rec.calls, want)
+	}
+	if strings.Join(rr.rec.calls[1], " ") != strings.Join(want, " ") {
+		t.Errorf("write call = %v, want %v", rr.rec.calls[1], want)
 	}
 
 	t.Run("requires --provider", func(t *testing.T) {

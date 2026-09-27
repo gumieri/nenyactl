@@ -170,6 +170,11 @@ type Paths struct {
 	ConfigFile string `json:"config_file"`
 	ConfigD    string `json:"config_d"`
 	SecretsDir string `json:"secrets_dir"`
+	// SecretsFile is the preferred single secrets file (additive in contract
+	// v1, nenya main; CONTRACT.md §4.2): <NENYA_SECRETS_DIR>/secrets.json when
+	// the env var is set, else <config-root>/secrets.json in directory mode.
+	// Nil for released binaries without the field — feature-detect via nil.
+	SecretsFile *string `json:"secrets_file"`
 	// SocketPath is null unless a Unix-domain socket is configured.
 	SocketPath *string `json:"socket_path"`
 	Platform   string  `json:"platform"`
@@ -220,6 +225,22 @@ type Description struct {
 		Catalog    []ProviderCatalogEntry `json:"catalog"`
 	} `json:"providers"`
 	Diagnostics []Diagnostic `json:"diagnostics"`
+}
+
+// Paths returns the resolved filesystem contract (CONTRACT.md §4.2): the
+// config dir/file, config.d, secrets dir/file, and socket path, resolved with
+// the same flags and environment the server uses (§3.3). Paths never loads
+// config or secrets, so it is safe to run before either exists.
+func (c *Client) Paths(ctx context.Context) (Paths, error) {
+	out, err := c.output(ctx, append([]string{"paths", "--json"}, c.target()...)...)
+	if err != nil {
+		return Paths{}, fmt.Errorf("nenya paths --json: %w", err)
+	}
+	var p Paths
+	if err := json.Unmarshal(out, &p); err != nil {
+		return Paths{}, fmt.Errorf("parse paths --json: %w", err)
+	}
+	return p, nil
 }
 
 // Describe returns the effective state. It is the single source of truth for

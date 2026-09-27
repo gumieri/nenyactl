@@ -51,6 +51,42 @@ const describeJSON = `{
   "diagnostics": [{"level": "warn", "code": "x", "message": "m", "source": "s"}]
 }`
 
+func TestClientPathsParsesAndTargets(t *testing.T) {
+	fr := &fakeRunner{out: []byte(`{"mode":"directory","config_dir":"/data/nenya","config_file":"/data/nenya/config.json","config_d":"/data/nenya/config.d","secrets_dir":"/run/secrets/nenya","secrets_file":"/data/nenya/secrets.json","socket_path":null,"platform":"linux"}`)}
+	p, err := New(fr).WithConfigDir("/data/nenya").Paths(context.Background())
+	if err != nil {
+		t.Fatalf("Paths: %v", err)
+	}
+	wantArgs := []string{"paths", "--json", "--config-dir", "/data/nenya"}
+	if !equalArgs(fr.args, wantArgs) {
+		t.Errorf("args = %v, want %v", fr.args, wantArgs)
+	}
+	if p.ConfigDir != "/data/nenya" || p.ConfigFile != "/data/nenya/config.json" || p.ConfigD != "/data/nenya/config.d" {
+		t.Errorf("paths = %+v", p)
+	}
+	if p.SecretsFile == nil || *p.SecretsFile != "/data/nenya/secrets.json" {
+		t.Errorf("SecretsFile = %v, want /data/nenya/secrets.json", p.SecretsFile)
+	}
+
+	// A released binary without the additive field parses with nil SecretsFile.
+	fr2 := &fakeRunner{out: []byte(`{"mode":"directory","config_dir":"/etc/nenya","config_file":"/etc/nenya/config.json","config_d":"/etc/nenya/config.d","secrets_dir":"/run/secrets/nenya","socket_path":null,"platform":"linux"}`)}
+	p2, err := New(fr2).Paths(context.Background())
+	if err != nil {
+		t.Fatalf("Paths (no secrets_file): %v", err)
+	}
+	if p2.SecretsFile != nil {
+		t.Errorf("SecretsFile = %v, want nil for a binary without the field", p2.SecretsFile)
+	}
+	if !equalArgs(fr2.args, []string{"paths", "--json"}) {
+		t.Errorf("unpinned args = %v, want no target flags", fr2.args)
+	}
+
+	// A failed probe surfaces the error so callers can fall back.
+	if _, err := New(&fakeRunner{err: errors.New("absent")}).Paths(context.Background()); err == nil {
+		t.Error("expected an error from a failed paths call")
+	}
+}
+
 func TestDescribeParsesEffectiveState(t *testing.T) {
 	fr := &fakeRunner{out: []byte(describeJSON)}
 	c := New(fr).WithConfigDir("/tmp/cfg")
