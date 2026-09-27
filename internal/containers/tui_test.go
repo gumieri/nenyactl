@@ -106,6 +106,19 @@ func TestContainersTUI_ProviderDef(t *testing.T) {
 			t.Error("ollama should not need a key")
 		}
 	})
+
+	t.Run("contract catalog providers are used without mutating the shim", func(t *testing.T) {
+		before := append([]ProviderDef{}, BuiltinProviders...)
+		m := newTUIModelWithProviders([]ProviderDef{
+			{Name: "anthropic", Help: "Anthropic", NeedsKey: true},
+		})
+		if len(m.providers) != 1 || m.providers[0].Name != "anthropic" {
+			t.Errorf("providers = %+v, want the contract catalog", m.providers)
+		}
+		if len(BuiltinProviders) != len(before) {
+			t.Errorf("BuiltinProviders was mutated: %d -> %d", len(before), len(BuiltinProviders))
+		}
+	})
 }
 
 func TestContainersTUI_ScreenNavigation(t *testing.T) {

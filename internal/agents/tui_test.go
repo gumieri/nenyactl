@@ -18,7 +18,7 @@ func testCatalog() Catalog {
 		{"anthropic", "claude-sonnet-4-5"},
 		{"gemini", "gemini-2.5-flash"},
 		{"openai", "gpt-5"},
-	}, nil)
+	})
 }
 
 func newTestModel() tuiModel { return newTUIModel(testCatalog()) }
@@ -85,7 +85,7 @@ func TestAgentsTUI_AutoMode(t *testing.T) {
 		}
 	})
 
-	t.Run("space on auto mode with no agents toggles and quits", func(t *testing.T) {
+	t.Run("space on auto mode with no agents toggles and saves", func(t *testing.T) {
 		m := newTestModel()
 		m.modeAuto = false
 		m.agents = nil
@@ -93,8 +93,8 @@ func TestAgentsTUI_AutoMode(t *testing.T) {
 		if !m.modeAuto {
 			t.Error("expected modeAuto to be true after toggle")
 		}
-		if !m.done {
-			t.Error("expected done flag when toggling auto on with no agents")
+		if !m.saved {
+			t.Error("expected saved flag when toggling auto on with no agents")
 		}
 	})
 }
@@ -306,6 +306,89 @@ func TestAgentsTUI_WindowSize(t *testing.T) {
 		}
 		if m.height != 50 {
 			t.Errorf("height = %d, want 50", m.height)
+		}
+	})
+}
+
+func TestAgentsTUI_LoadDefaultsFromCatalog(t *testing.T) {
+	m := newTestModel()
+	m.loadDefaults()
+
+	// One agent per provider, named after the provider, seeded with that
+	// provider's first model.
+	want := map[string]string{
+		"anthropic": "claude-sonnet-4-5",
+		"gemini":    "gemini-2.5-flash",
+		"openai":    "gpt-5",
+	}
+	if len(m.agents) != len(want) {
+		t.Fatalf("agents = %d, want %d: %+v", len(m.agents), len(want), m.agents)
+	}
+	for _, a := range m.agents {
+		model, ok := want[a.Name]
+		if !ok {
+			t.Errorf("unexpected agent %q", a.Name)
+			continue
+		}
+		if len(a.Models) != 1 || a.Models[0] != model {
+			t.Errorf("agent %s models = %v, want [%s]", a.Name, a.Models, model)
+		}
+		if a.Strategy != defaultStrategy {
+			t.Errorf("agent %s strategy = %q, want %q", a.Name, a.Strategy, defaultStrategy)
+		}
+	}
+}
+
+func TestAgentsTUI_ModelFilter(t *testing.T) {
+	m := newTestModel()
+
+	m.modelFilter.SetValue("gemini")
+	m.loadModels()
+	if len(m.models) != 1 || m.models[0].Provider != "gemini" {
+		t.Errorf("filter by provider = %+v, want the gemini row", m.models)
+	}
+
+	m.modelFilter.SetValue("claude")
+	m.loadModels()
+	if len(m.models) != 1 || m.models[0].ID != "claude-sonnet-4-5" {
+		t.Errorf("filter by model = %+v, want claude-sonnet-4-5", m.models)
+	}
+}
+
+func TestAgentsTUI_EditorResult(t *testing.T) {
+	t.Run("unsaved is a no-op", func(t *testing.T) {
+		m := newTestModel()
+		useAuto, cfg, err := m.editorResult()
+		if err != nil || useAuto || cfg != nil {
+			t.Errorf("editorResult = %v, %v, %v; want false, nil, nil", useAuto, cfg, err)
+		}
+	})
+
+	t.Run("saved auto returns auto", func(t *testing.T) {
+		m := newTestModel()
+		m.modeAuto = true
+		m.saved = true
+		useAuto, cfg, err := m.editorResult()
+		if err != nil || !useAuto || cfg != nil {
+			t.Errorf("editorResult = %v, %v, %v; want true, nil, nil", useAuto, cfg, err)
+		}
+	})
+
+	t.Run("saved custom returns the agents map", func(t *testing.T) {
+		m := newTestModel()
+		m.saved = true
+		m.modeAuto = false
+		m.loadDefaults()
+		useAuto, cfg, err := m.editorResult()
+		if err != nil || useAuto {
+			t.Fatalf("editorResult = %v, %v, %v", useAuto, cfg, err)
+		}
+		agentsMap, ok := cfg["agents"].(map[string]map[string]any)
+		if !ok {
+			t.Fatalf("cfg = %#v, want an agents map", cfg)
+		}
+		if len(agentsMap) != len(m.agents) {
+			t.Errorf("agents map = %d, want %d", len(agentsMap), len(m.agents))
 		}
 	})
 }

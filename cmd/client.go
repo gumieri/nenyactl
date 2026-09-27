@@ -117,10 +117,13 @@ func runClientAdd(cmd *cobra.Command, args []string) error {
 // mapping is used only when describe cannot report one. Tokens come from the
 // deployment's secrets, never a hardcoded path.
 func resolvedEndpoint(ctx context.Context, res dirResolution) (clients.Endpoint, error) {
-	desc, _ := res.Contract().Describe(ctx)
-	port := statusPort(res, desc, len(desc.Config) > 0)
+	desc, descErr := res.Contract().Describe(ctx)
+	port := statusPort(res, desc, descErr == nil)
 	if port == "" {
-		return clients.Endpoint{}, fmt.Errorf("could not resolve the gateway port for %s", res.Path)
+		if descErr != nil {
+			return clients.Endpoint{}, fmt.Errorf("could not resolve the gateway port for %s: nenya describe --json unavailable (%v); set server.listen_addr or upgrade nenya", res.Path, descErr)
+		}
+		return clients.Endpoint{}, fmt.Errorf("could not resolve the gateway port for %s: server.listen_addr is not set", res.Path)
 	}
 	base := "http://localhost:" + port
 

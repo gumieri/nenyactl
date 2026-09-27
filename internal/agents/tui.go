@@ -65,7 +65,8 @@ type tuiModel struct {
 	helpModel     help.Model
 	helpKM        tui.KeyMap
 
-	done bool
+	saved bool
+	done  bool
 }
 
 func newTUIModel(catalog Catalog) tuiModel {
@@ -146,6 +147,9 @@ func (m *tuiModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.done = true
 		return m, tea.Quit
+	case "s":
+		m.saved = true
+		return m, tea.Quit
 	case "enter":
 		if m.cursor < len(m.agents) {
 			m.startEdit(m.cursor)
@@ -157,7 +161,9 @@ func (m *tuiModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor == 0 {
 			m.modeAuto = !m.modeAuto
 			if m.modeAuto {
-				m.done = true
+				// Turning auto on is itself the save; auto-agents need no
+				// custom list.
+				m.saved = true
 				return m, tea.Quit
 			}
 			m.loadDefaults()
@@ -340,7 +346,7 @@ func (m *tuiModel) startEdit(idx int) {
 func (m *tuiModel) startNew() {
 	m.screen = screenEdit
 	m.cursor = len(m.agents)
-	m.agents = append(m.agents, Agent{Name: "new-agent", Strategy: "fallback", Models: nil})
+	m.agents = append(m.agents, Agent{Name: "new-agent", Strategy: defaultStrategy, Models: nil})
 	m.editName.SetValue("new-agent")
 	m.editName.Focus()
 	m.strategyIdx = 0
@@ -774,17 +780,29 @@ func RunAgentEditor(catalog Catalog) (bool, map[string]any, error) {
 	if !ok {
 		return false, nil, nil
 	}
+	return tm.editorResult()
+}
 
-	if tm.done && tm.modeAuto {
+// editorResult assembles the editor's output from its final state. It is
+// separate from the TUI run loop so the assembly (not just the interactive
+// path) is unit-testable.
+func (m *tuiModel) editorResult() (bool, map[string]any, error) {
+	// Not saved (q/esc) is a no-op.
+	if !m.saved {
+		return false, nil, nil
+	}
+
+	// Auto-agents is the "use defaults" choice; nothing to write.
+	if m.modeAuto {
 		return true, nil, nil
 	}
 
-	if tm.done || len(tm.agents) == 0 {
+	if len(m.agents) == 0 {
 		return false, nil, nil
 	}
 
 	agentsMap := make(map[string]map[string]any)
-	for _, a := range tm.agents {
+	for _, a := range m.agents {
 		agentsMap[a.Name] = map[string]any{
 			"strategy": a.Strategy,
 			"models":   a.Models,

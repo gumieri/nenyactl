@@ -19,6 +19,12 @@ type ProviderDef struct {
 	NeedsKey bool
 }
 
+// BuiltinProviders is a documented scaffold-time shim: `containers setup`
+// creates a deployment before a nenya binary exists on the machine, so it
+// cannot call `nenya describe --json` (the authoritative provider catalog,
+// CONTRACT.md §4.3). Callers that do have a binary pass the contract catalog to
+// CollectProviderKeys instead; this list is pruned when the container flow can
+// assume an installed binary.
 var BuiltinProviders = []ProviderDef{
 	{Name: "gemini", Help: "Google AI", Auth: "AIza...", NeedsKey: true},
 	{Name: "deepseek", Help: "DeepSeek", Auth: "sk-...", NeedsKey: true},
@@ -80,11 +86,19 @@ type customResult struct {
 }
 
 func newTUIModel() tuiModel {
-	sort.Slice(BuiltinProviders, func(i, j int) bool {
-		if BuiltinProviders[i].NeedsKey != BuiltinProviders[j].NeedsKey {
-			return BuiltinProviders[i].NeedsKey
+	return newTUIModelWithProviders(BuiltinProviders)
+}
+
+// newTUIModelWithProviders builds the provider picker from the given providers.
+// Pass the contract catalog when a nenya binary is available; BuiltinProviders
+// is the scaffold-time shim.
+func newTUIModelWithProviders(providers []ProviderDef) tuiModel {
+	providers = append([]ProviderDef{}, providers...)
+	sort.Slice(providers, func(i, j int) bool {
+		if providers[i].NeedsKey != providers[j].NeedsKey {
+			return providers[i].NeedsKey
 		}
-		return BuiltinProviders[i].Name < BuiltinProviders[j].Name
+		return providers[i].Name < providers[j].Name
 	})
 
 	cols := []table.Column{
@@ -95,7 +109,7 @@ func newTUIModel() tuiModel {
 	}
 
 	rows := []table.Row{}
-	for _, p := range BuiltinProviders {
+	for _, p := range providers {
 		rows = append(rows, table.Row{"  ", p.Name, p.Help, keyReqText(p)})
 	}
 	rows = append(rows, table.Row{"  ", "+ Add custom provider...", "", ""})
@@ -129,7 +143,7 @@ func newTUIModel() tuiModel {
 
 	return tuiModel{
 		screen:      screenSelect,
-		providers:   BuiltinProviders,
+		providers:   providers,
 		selected:    make(map[int]bool),
 		table:       t,
 		customName:  customName,
@@ -494,8 +508,18 @@ func (m tuiModel) Results() map[string]string {
 	return result
 }
 
+// CollectProviderKeys runs the provider-key picker with the scaffold-time
+// provider shim. Prefer CollectProviderKeysFrom when a nenya binary is
+// available.
 func CollectProviderKeys() (map[string]string, error) {
-	m := newTUIModel()
+	return CollectProviderKeysFrom(BuiltinProviders)
+}
+
+// CollectProviderKeysFrom runs the provider-key picker with the given provider
+// catalog. Callers with an installed nenya pass the contract catalog so the
+// picker matches what the gateway actually supports.
+func CollectProviderKeysFrom(providers []ProviderDef) (map[string]string, error) {
+	m := newTUIModelWithProviders(providers)
 	p := tea.NewProgram(&m, tea.WithAltScreen())
 	result, err := p.Run()
 	if err != nil {

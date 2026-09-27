@@ -179,8 +179,12 @@ func bootstrapSecrets(p installPaths) (bool, error) {
 		return false, fmt.Errorf("create secrets dir %s: %w", filepath.Dir(p.secretsFile), err)
 	}
 
+	token, err := secrets.GenerateClientToken()
+	if err != nil {
+		return false, err
+	}
 	content, err := json.MarshalIndent(map[string]string{
-		"client_token": secrets.GenerateClientToken(),
+		"client_token": token,
 	}, "", "  ")
 	if err != nil {
 		return false, fmt.Errorf("marshal secrets: %w", err)

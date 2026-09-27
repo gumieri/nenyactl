@@ -14,6 +14,7 @@ type KeyMap struct {
 	Delete key.Binding
 	Add    key.Binding
 	Toggle key.Binding
+	Save   key.Binding
 }
 
 func NewHelpModel() help.Model {
@@ -33,7 +34,7 @@ func NewHelpModel() help.Model {
 
 func (k KeyMap) ShortHelp() []key.Binding {
 	b := []key.Binding{}
-	for _, x := range []key.Binding{k.Up, k.Down, k.Select, k.Back, k.Quit, k.Delete, k.Add, k.Toggle} {
+	for _, x := range []key.Binding{k.Up, k.Down, k.Select, k.Back, k.Quit, k.Delete, k.Add, k.Toggle, k.Save} {
 		if x.Help().Key != "" || x.Help().Desc != "" {
 			b = append(b, x)
 		}
@@ -54,6 +55,7 @@ var ListKeyMap = KeyMap{
 	Delete: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
 	Add:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add")),
 	Toggle: key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
+	Save:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "save")),
 }
 
 var FormKeyMap = KeyMap{

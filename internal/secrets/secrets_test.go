@@ -8,7 +8,10 @@ import (
 )
 
 func TestGenerateClientToken(t *testing.T) {
-	token := GenerateClientToken()
+	token, err := GenerateClientToken()
+	if err != nil {
+		t.Fatalf("GenerateClientToken() error = %v", err)
+	}
 	if token == "" {
 		t.Fatal("GenerateClientToken() returned empty string")
 	}
@@ -25,7 +28,10 @@ func TestGenerateClientToken(t *testing.T) {
 func TestGenerateClientTokenUniqueness(t *testing.T) {
 	seen := make(map[string]bool)
 	for i := 0; i < 100; i++ {
-		token := GenerateClientToken()
+		token, err := GenerateClientToken()
+		if err != nil {
+			t.Fatalf("GenerateClientToken() error = %v", err)
+		}
 		if seen[token] {
 			t.Errorf("duplicate token generated: %q", token)
 		}
@@ -34,7 +40,10 @@ func TestGenerateClientTokenUniqueness(t *testing.T) {
 }
 
 func TestGenerateAPIKey(t *testing.T) {
-	key, name := GenerateAPIKey()
+	key, name, err := GenerateAPIKey()
+	if err != nil {
+		t.Fatalf("GenerateAPIKey() error = %v", err)
+	}
 	if key == "" {
 		t.Error("GenerateAPIKey() returned empty key")
 	}
@@ -50,7 +59,10 @@ func TestGenerateAPIKey(t *testing.T) {
 func TestGenerateAPIKeyUniqueness(t *testing.T) {
 	seen := make(map[string]bool)
 	for i := 0; i < 100; i++ {
-		key, _ := GenerateAPIKey()
+		key, _, err := GenerateAPIKey()
+		if err != nil {
+			t.Fatalf("GenerateAPIKey() error = %v", err)
+		}
 		if seen[key] {
 			t.Errorf("duplicate API key generated: %q", key)
 		}

@@ -40,13 +40,18 @@ func TestInstallServiceUnitsGeneratesForCustomRoot(t *testing.T) {
 	}
 
 	extractDir := t.TempDir()
-	// No deploy/ members: the archive fallback must not be needed when
-	// service-unit succeeds, proving generation (not copying) is used.
+	// The socket is always taken from the archive; provide only that member,
+	// proving the service is generated (not copied) when service-unit works.
+	if err := os.MkdirAll(filepath.Join(extractDir, "deploy"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(extractDir, "deploy/nenya.socket"), []byte("[Socket]\nListenStream=8080\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	unitDir := t.TempDir()
 	configDir := "/custom/nenya"
 	secretsFile := "/custom/nenya/secrets.json"
 
-	// Both systemd units share one --init, so one key covers them.
 	key := "/bin/nenya service-unit --init systemd --exec-path /bin/nenya --config-dir " + configDir + " --secrets-file " + secretsFile
 	r := scriptRunner{outputs: map[string]string{key: "[Unit]\nExecStart=/bin/nenya --config-dir " + configDir + "\n"}}
 
@@ -54,14 +59,20 @@ func TestInstallServiceUnitsGeneratesForCustomRoot(t *testing.T) {
 		t.Fatalf("installServiceUnitsTo: %v", err)
 	}
 
-	for _, spec := range unitSpecs() {
-		data, err := os.ReadFile(filepath.Join(unitDir, spec.destination))
-		if err != nil {
-			t.Fatalf("generated unit %s missing: %v", spec.destination, err)
-		}
-		if !strings.Contains(string(data), "--config-dir "+configDir) {
-			t.Errorf("%s does not reference the config root: %q", spec.destination, data)
-		}
+	service, err := os.ReadFile(filepath.Join(unitDir, "nenya.service"))
+	if err != nil {
+		t.Fatalf("generated service unit missing: %v", err)
+	}
+	if !strings.Contains(string(service), "--config-dir "+configDir) {
+		t.Errorf("nenya.service does not reference the config root: %q", service)
+	}
+
+	socket, err := os.ReadFile(filepath.Join(unitDir, "nenya.socket"))
+	if err != nil {
+		t.Fatalf("socket unit missing: %v", err)
+	}
+	if !strings.Contains(string(socket), "[Socket]") {
+		t.Errorf("nenya.socket must come from the archive, got: %q", socket)
 	}
 }
 

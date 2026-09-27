@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gumieri/nenyactl/internal/containers"
 	"github.com/gumieri/nenyactl/internal/detect"
 	"github.com/gumieri/nenyactl/internal/install"
 )
@@ -101,13 +102,16 @@ func TestUpDeploymentCreatesMissingConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// describe is unavailable (a released nenya without it); up must still
+	// resolve the port from the config it just bootstrapped and reach health.
 	rr := newRecordingRunner()
-	// describe succeeds and reports a port, so up can wait for health; no
-	// provider keys are written because the catalog/configured set is empty.
 	rr.rec.onCall = func(args []string) {
 		if len(args) > 0 && args[0] == "describe" {
-			rr.out = []byte(`{"contract_version":1,"config":{"server":{"listen_addr":":8080"}}}`)
+			rr.err = errors.New("nenya describe: unknown command")
+			return
 		}
+		rr.err = nil
+		rr.out = []byte("/tmp/secrets.json")
 	}
 	fakeContract(t, rr)
 
@@ -145,7 +149,9 @@ func TestUpDeploymentReloadsAfterSavingKeys(t *testing.T) {
 	fakeContract(t, rr)
 
 	savedKeys := upCollectKeys
-	upCollectKeys = func() (map[string]string, error) { return map[string]string{"openai": "sk-x"}, nil }
+	upCollectKeys = func([]containers.ProviderDef) (map[string]string, error) {
+		return map[string]string{"openai": "sk-x"}, nil
+	}
 	t.Cleanup(func() { upCollectKeys = savedKeys })
 
 	savedStart := upServiceRun
@@ -188,7 +194,9 @@ func TestUpDeploymentRestartsContainersAfterSavingKeys(t *testing.T) {
 	fakeContract(t, rr)
 
 	savedKeys := upCollectKeys
-	upCollectKeys = func() (map[string]string, error) { return map[string]string{"openai": "sk-x"}, nil }
+	upCollectKeys = func([]containers.ProviderDef) (map[string]string, error) {
+		return map[string]string{"openai": "sk-x"}, nil
+	}
 	t.Cleanup(func() { upCollectKeys = savedKeys })
 
 	restarted := false

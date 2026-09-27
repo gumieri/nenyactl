@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/gumieri/nenyactl/internal/containers"
 	"github.com/gumieri/nenyactl/internal/detect"
+	"github.com/gumieri/nenyactl/internal/jsonc"
 	"github.com/gumieri/nenyactl/internal/nenya"
 	"github.com/spf13/cobra"
 )
@@ -199,25 +202,98 @@ func writeStatusAgents(b *strings.Builder, effective []byte) {
 	}
 }
 
-// statusPort resolves the published/effective port from the deployment, never a
-// hardcoded default. It returns "" when no port can be determined.
+// statusPort resolves the published/effective port from the deployment. It
+// prefers the effective config from `nenya describe --json`; when that surface
+// is unavailable (a released nenya without it) it falls back to a container's
+// published port and to the deployment's config file, mirroring nenya's
+// directory layout. It returns "" when no port can be determined.
 func statusPort(res dirResolution, desc nenya.Description, haveDesc bool) string {
+	if haveDesc && len(desc.Config) > 0 {
+		if p := portFromEffective(desc.Config); p != "" {
+			return p
+		}
+	}
 	if res.Kind == dirContainerRoot {
 		if p, ok := containers.HostPort(res.Path); ok && p != "" {
 			return p
 		}
 	}
-	if haveDesc && len(desc.Config) > 0 {
-		var cfg struct {
-			Server struct {
-				ListenAddr string `json:"listen_addr"`
-			} `json:"server"`
+	// Fallback for a deployment whose nenya lacks `describe --json`: read the
+	// listen address from the layout actually in use (config.json, then any
+	// config.d drop-in). Deleted once describe is stable everywhere.
+	if p := portFromConfigFile(res.Info.ConfigFile); p != "" {
+		return p
+	}
+	if p := portFromConfigDropIns(res.Info.ConfigD); p != "" {
+		return p
+	}
+	if res.Kind == dirContainerRoot {
+		return containers.DefaultPort
+	}
+	return ""
+}
+
+// portFromEffective extracts the listen port from the effective config JSON
+// (server.listen_addr).
+func portFromEffective(effective []byte) string {
+	var cfg struct {
+		Server struct {
+			ListenAddr string `json:"listen_addr"`
+		} `json:"server"`
+	}
+	if err := json.Unmarshal(effective, &cfg); err != nil {
+		return ""
+	}
+	return splitPort(cfg.Server.ListenAddr)
+}
+
+// portFromConfigFile reads server.listen_addr from a JSONC config file.
+func portFromConfigFile(path string) string {
+	if path == "" {
+		return ""
+	}
+	v, err := jsonc.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	field, ok := jsonc.GetNestedField(v, []string{"server", "listen_addr"})
+	if !ok {
+		return ""
+	}
+	return splitPort(strings.Trim(jsonc.FieldValueString(field), `"`))
+}
+
+// portFromConfigDropIns returns the last listen port found in config.d, in
+// ascending filename order (later file wins), skipping secrets.json.
+func portFromConfigDropIns(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var files []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") && e.Name() != "secrets.json" {
+			files = append(files, filepath.Join(dir, e.Name()))
 		}
-		if err := json.Unmarshal(desc.Config, &cfg); err == nil {
-			if _, port, err := net.SplitHostPort(cfg.Server.ListenAddr); err == nil && port != "" {
-				return port
-			}
+	}
+	sort.Strings(files)
+	port := ""
+	for _, f := range files {
+		if p := portFromConfigFile(f); p != "" {
+			port = p
 		}
+	}
+	return port
+}
+
+// splitPort returns the port from a host:port address, or "" when it cannot be
+// parsed.
+func splitPort(addr string) string {
+	if addr == "" {
+		return ""
+	}
+	if _, port, err := net.SplitHostPort(addr); err == nil {
+		return port
 	}
 	return ""
 }

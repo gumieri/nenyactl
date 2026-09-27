@@ -111,11 +111,13 @@ func newConfigModel(cfg *hujson.Value, effective []byte) configModel {
 	m.editInput.CharLimit = 256
 	m.editInput.Width = 50
 
-	// Fill sections array
+	// Fill sections array. An existing "agents" section opens the agents
+	// editor (not the raw JSON view, where object values cannot be edited); a
+	// synthetic one is appended when the effective config has none.
 	for i, key := range sections {
 		m.sections[i] = sectionInfo{
 			name:    key,
-			isAgent: false,
+			isAgent: key == "agents",
 		}
 	}
 	// Add the synthetic agents section at the end when the effective config
@@ -364,6 +366,8 @@ func (m *configModel) loadSection(sectionName string) {
 	obj, ok := field.Value.(*hujson.Object)
 	if !ok {
 		m.entries = []configEntry{{Key: sectionName, Value: field}}
+		m.cursor = 0
+		m.scrollKeys()
 		return
 	}
 

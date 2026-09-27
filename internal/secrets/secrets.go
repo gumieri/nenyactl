@@ -10,22 +10,27 @@ import (
 	"sort"
 )
 
-func GenerateClientToken() string {
+// GenerateClientToken returns a fresh client token ("nk-" + 32 random bytes as
+// hex). It returns an error rather than panicking so a caller can fail fast on
+// a broken CSPRNG.
+func GenerateClientToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand failed: %v", err))
+		return "", fmt.Errorf("generate client token: %w", err)
 	}
-	return "nk-" + hex.EncodeToString(b)
+	return "nk-" + hex.EncodeToString(b), nil
 }
 
-func GenerateAPIKey() (string, string) {
+// GenerateAPIKey returns a fresh client id and API key. It returns an error
+// rather than panicking so a caller can fail fast on a broken CSPRNG.
+func GenerateAPIKey() (string, string, error) {
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand failed: %v", err))
+		return "", "", fmt.Errorf("generate api key: %w", err)
 	}
 	token := "nk-" + hex.EncodeToString(b)
 	id := hex.EncodeToString(b[:4])
-	return id, token
+	return id, token, nil
 }
 
 // ExistingTokenFile reports the path of a file in dir that already holds a
@@ -95,6 +100,9 @@ func ClientTokenFromJSON(data []byte) string {
 // order; it is a documented read-only compatibility check for the window before
 // a contract read surface exists (NENYA-103), not the source of truth.
 func ClientTokenInDir(dir string) string {
+	if dir == "" {
+		return ""
+	}
 	token := ""
 	if entries, err := os.ReadDir(dir); err == nil {
 		var files []string

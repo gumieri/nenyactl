@@ -42,14 +42,21 @@ func init() {
 func runSecretGenerate(cmd *cobra.Command, args []string) error {
 	switch secretType {
 	case "client":
-		fmt.Println(secrets.GenerateClientToken())
+		token, err := secrets.GenerateClientToken()
+		if err != nil {
+			return err
+		}
+		fmt.Println(token)
 		return nil
 
 	case "apikey":
 		if secretForClient == "" {
 			return fmt.Errorf("--name is required for --type apikey")
 		}
-		id, token := secrets.GenerateAPIKey()
+		id, token, err := secrets.GenerateAPIKey()
+		if err != nil {
+			return err
+		}
 		fmt.Printf("ID:    %s\n", id)
 		fmt.Printf("Name:  %s\n", secretForClient)
 		fmt.Printf("Token: %s\n", token)

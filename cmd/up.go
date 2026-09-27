@@ -36,7 +36,7 @@ var (
 	upServiceReload    = func() error { return runServiceReloadWithExec(defaultExec) }
 	upContainerStart   = func(dir string) error { return runContainerStartWithExec(defaultExec, dir) }
 	upContainerRestart = func(dir string) error { return runContainerRestartWithExec(defaultExec, dir) }
-	upCollectKeys      = containers.CollectProviderKeys
+	upCollectKeys      = containers.CollectProviderKeysFrom
 	upDetect           = detect.Detect
 )
 
@@ -193,7 +193,7 @@ func ensureProviderKeys(ctx context.Context, res dirResolution, desc nenya.Descr
 	if len(desc.Providers.Configured) > 0 {
 		return false
 	}
-	keys, err := upCollectKeys()
+	keys, err := upCollectKeys(providerDefs(desc.Providers.Catalog, desc.Providers.Configured))
 	if err != nil || len(keys) == 0 {
 		return false
 	}
@@ -208,6 +208,31 @@ func ensureProviderKeys(ctx context.Context, res dirResolution, desc nenya.Descr
 		fmt.Println(successStyle.Render("✓"), "Saved provider key", provider)
 	}
 	return wrote
+}
+
+// providerDefs builds the provider-key picker rows from the contract catalog,
+// falling back to the scaffold shim when describe reports no catalog.
+func providerDefs(catalog []nenya.ProviderCatalogEntry, configured []string) []containers.ProviderDef {
+	seen := make(map[string]bool)
+	var defs []containers.ProviderDef
+	for _, e := range catalog {
+		if e.Provider == "" || seen[e.Provider] {
+			continue
+		}
+		seen[e.Provider] = true
+		defs = append(defs, containers.ProviderDef{Name: e.Provider, Help: e.Provider, NeedsKey: true})
+	}
+	for _, provider := range configured {
+		if provider == "" || seen[provider] {
+			continue
+		}
+		seen[provider] = true
+		defs = append(defs, containers.ProviderDef{Name: provider, Help: provider, NeedsKey: true})
+	}
+	if len(defs) == 0 {
+		return containers.BuiltinProviders
+	}
+	return defs
 }
 
 // startDeployment starts the resolved deployment: compose for a container root,

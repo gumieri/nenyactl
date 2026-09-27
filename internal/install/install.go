@@ -29,8 +29,9 @@ const (
 	// ExecStart does not exist.
 	binDir = "/usr/bin"
 	// defaultUnitConfigDir is the config root hardcoded by the shipped units
-	// (systemd LoadCredential and the launchd NENYA_CONFIG_DIR). Regenerate
-	// with `nenya service-unit` (contract target) for a different root.
+	// (systemd LoadCredential and the launchd NENYA_CONFIG_DIR). nenyactl
+	// regenerates the unit with `nenya service-unit` (CONTRACT.md §4.5) for any
+	// other root.
 	defaultUnitConfigDir = "/etc/nenya"
 )
 
@@ -190,16 +191,14 @@ func InstallWithHTTPAndRunner(ctx context.Context, cfg Config, hc HTTPDoer, runn
 			return pathErr
 		}
 
-		if doService && p.configDir != defaultUnitConfigDir {
-			fmt.Fprintf(os.Stderr, "Note: generating the service unit for config root %s (nenya service-unit).\n", p.configDir)
-		}
-
 		serviceReady := true
 		if doService {
 			if err := installServiceUnits(ctx, runner, dest, extractDir, p); err != nil {
 				serviceReady = false
 				fmt.Fprintf(os.Stderr, "Warning: failed to install service files: %v\n", err)
 				fmt.Fprintln(os.Stderr, "You can run nenya directly from the command line.")
+			} else {
+				warnIfNonDefaultRoot(ctx, runner, dest, p)
 			}
 		}
 
@@ -305,6 +304,9 @@ func checkInstalledContract(ctx context.Context, runner CommandRunner, execPath 
 	return nil
 }
 
+// installServiceFiles installs the platform's units from the release archive.
+// It is the documented fallback used when `nenya service-unit` is unavailable;
+// prefer installServiceUnits, which generates config-root-aware units.
 func installServiceFiles(extractDir string) error {
 	return installServiceFilesTo(extractDir, systemUnitDir())
 }
@@ -316,52 +318,75 @@ type extractFile struct {
 }
 
 // serviceUnitSpec is one unit to install: the archive member that carries it
-// (the fallback) and its destination name in the unit directory.
+// (the fallback) and its destination name in the unit directory. generated is
+// true when `nenya service-unit` can produce this unit; the contract emits the
+// service unit only (the socket is a release-archive member, per CONTRACT.md
+// §4.5).
 type serviceUnitSpec struct {
-	init        string // nenya service-unit --init value
-	member      string // release-archive member (fallback source)
+	member      string // release-archive member
 	destination string // filename under the unit directory
+	generated   bool   // whether nenya service-unit emits this unit
+	init        string // nenya service-unit --init value
 }
 
 // unitSpecs returns the units to install for the current platform.
 func unitSpecs() []serviceUnitSpec {
 	if runtime.GOOS == "darwin" {
 		return []serviceUnitSpec{
-			{init: "launchd", member: "deploy/nenya.plist", destination: "com.gumieri.nenya.plist"},
+			{member: "deploy/nenya.plist", destination: "com.gumieri.nenya.plist", generated: true, init: "launchd"},
 		}
 	}
 	return []serviceUnitSpec{
-		{init: "systemd", member: "deploy/nenya.service", destination: "nenya.service"},
-		{init: "systemd", member: "deploy/nenya.socket", destination: "nenya.socket"},
+		{member: "deploy/nenya.service", destination: "nenya.service", generated: true, init: "systemd"},
+		// nenya service-unit emits the service unit only, so the socket is
+		// always taken from the release archive.
+		{member: "deploy/nenya.socket", destination: "nenya.socket"},
 	}
 }
 
-// installServiceUnits installs the platform's service units. It generates them
-// with `nenya service-unit` (CONTRACT.md §4.5) so the units reference the
-// install's actual config root and credential file; it falls back to the
-// archive members only when that command is absent from the installed binary.
+// installServiceUnits installs the platform's service units. It generates the
+// unit(s) `nenya service-unit` supports (CONTRACT.md §4.5) so they reference the
+// install's actual config root and credential file, and copies the remaining
+// members from the archive.
 func installServiceUnits(ctx context.Context, runner CommandRunner, execPath, extractDir string, p installPaths) error {
 	return installServiceUnitsTo(ctx, runner, execPath, extractDir, p.unitDir, p.configDir, p.secretsFile)
 }
 
 func installServiceUnitsTo(ctx context.Context, runner CommandRunner, execPath, extractDir, unitDir, configDir, secretsFile string) error {
-	specs := unitSpecs()
-	for _, spec := range specs {
-		content, ok := serviceUnitContent(ctx, runner, execPath, spec.init, configDir, secretsFile)
-		if !ok {
-			// Feature-detection failed: fall back to the archive member, which
-			// pins the default config root. Non-default roots were already
-			// surfaced as a note above.
-			if err := copyFromExtract(extractDir, []extractFile{{spec.member, filepath.Join(unitDir, spec.destination)}}); err != nil {
-				return err
+	for _, spec := range unitSpecs() {
+		if spec.generated {
+			if content, ok := serviceUnitContent(ctx, runner, execPath, spec.init, configDir, secretsFile); ok {
+				if err := writeUnitFile(filepath.Join(unitDir, spec.destination), content); err != nil {
+					return err
+				}
+				continue
 			}
-			continue
 		}
-		if err := writeUnitFile(filepath.Join(unitDir, spec.destination), content); err != nil {
+		// Fall back to the archive member. It pins the default config root, so
+		// callers warn when that differs from the install's root.
+		if err := copyFromExtract(extractDir, []extractFile{{spec.member, filepath.Join(unitDir, spec.destination)}}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// warnIfNonDefaultRoot reports whether the installed unit actually references
+// the install's config root. When service-unit generated it, the unit does; when
+// the archive fallback was used instead, the unit pins the default root and the
+// user is warned.
+func warnIfNonDefaultRoot(ctx context.Context, runner CommandRunner, execPath string, p installPaths) {
+	if p.configDir == defaultUnitConfigDir {
+		return
+	}
+	unitPath := filepath.Join(p.unitDir, unitSpecs()[0].destination)
+	data, err := os.ReadFile(unitPath)
+	if err == nil && bytes.Contains(data, []byte(p.configDir)) {
+		fmt.Fprintf(os.Stderr, "Note: generated the service unit for config root %s (nenya service-unit).\n", p.configDir)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Warning: config root is %s but the installed unit references %s.\n", p.configDir, defaultUnitConfigDir)
+	fmt.Fprintf(os.Stderr, "Regenerate it with 'nenya service-unit --config-dir %s --secrets-file %s'.\n", p.configDir, p.secretsFile)
 }
 
 // serviceUnitContent asks nenya to generate a unit for the given init system and

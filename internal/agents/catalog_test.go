@@ -1,6 +1,9 @@
 package agents
 
-import "testing"
+import (
+	"sort"
+	"testing"
+)
 
 func TestCatalogFromDescribe(t *testing.T) {
 	t.Run("uses the provider catalog and sorts", func(t *testing.T) {
@@ -8,7 +11,7 @@ func TestCatalogFromDescribe(t *testing.T) {
 			{"gemini", "gemini-2.5-flash"},
 			{"anthropic", "claude-sonnet-4-5"},
 			{"anthropic", "claude-opus-4-7"},
-		}, nil)
+		})
 
 		want := []CatalogModel{
 			{Provider: "anthropic", Model: "claude-opus-4-7"},
@@ -29,36 +32,32 @@ func TestCatalogFromDescribe(t *testing.T) {
 		c := CatalogFromDescribe([][2]string{
 			{"anthropic", "claude-sonnet-4-5"},
 			{"anthropic", "claude-sonnet-4-5"},
-		}, nil)
+		})
 		if len(c.Models) != 1 {
 			t.Fatalf("models = %v, want one entry", c.Models)
 		}
 	})
 
-	t.Run("adds configured providers missing from the catalog", func(t *testing.T) {
-		c := CatalogFromDescribe([][2]string{{"anthropic", "claude-sonnet-4-5"}}, []string{"anthropic", "openai"})
-		found := false
-		for _, m := range c.Models {
-			if m.Provider == "openai" {
-				found = true
-			}
-			if m.Provider == "anthropic" && m.Model == "anthropic" {
-				t.Errorf("configured provider must not shadow a real catalog model: %v", m)
-			}
+	t.Run("ignores configured providers with no catalog entry", func(t *testing.T) {
+		// nenya owns the catalog: a configured provider without a catalog
+		// entry must not become a fabricated model row.
+		c := CatalogFromDescribe([][2]string{{"anthropic", "claude-sonnet-4-5"}})
+		if len(c.Models) != 1 {
+			t.Fatalf("models = %v, want only the real catalog entry", c.Models)
 		}
-		if !found {
-			t.Errorf("configured provider openai missing from catalog: %v", c.Models)
+		if c.Models[0].Provider != "anthropic" || c.Models[0].Model != "claude-sonnet-4-5" {
+			t.Errorf("models = %v", c.Models)
 		}
 	})
 
 	t.Run("empty describe yields an empty catalog", func(t *testing.T) {
-		if c := CatalogFromDescribe(nil, nil); len(c.Models) != 0 {
+		if c := CatalogFromDescribe(nil); len(c.Models) != 0 {
 			t.Errorf("models = %v, want empty", c.Models)
 		}
 	})
 
 	t.Run("ignores blank provider or model", func(t *testing.T) {
-		c := CatalogFromDescribe([][2]string{{"", "x"}, {"y", ""}, {"", ""}}, nil)
+		c := CatalogFromDescribe([][2]string{{"", "x"}, {"y", ""}, {"", ""}})
 		if len(c.Models) != 0 {
 			t.Errorf("models = %v, want empty", c.Models)
 		}
@@ -75,5 +74,8 @@ func TestStrategies(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Errorf("missing strategies: %v", want)
+	}
+	if !sort.StringsAreSorted(append([]string{}, Strategies...)) {
+		t.Errorf("Strategies should be sorted: %v", Strategies)
 	}
 }

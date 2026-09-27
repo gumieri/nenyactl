@@ -26,6 +26,44 @@ func TestCatalogPairs(t *testing.T) {
 	}
 }
 
+func TestProviderDefs(t *testing.T) {
+	t.Run("uses the catalog providers", func(t *testing.T) {
+		defs := providerDefs([]nenya.ProviderCatalogEntry{
+			{Provider: "anthropic", Model: "claude-sonnet-4-5"},
+			{Provider: "anthropic", Model: "claude-opus-4-7"},
+			{Provider: "gemini", Model: "gemini-2.5-flash"},
+		}, nil)
+		if len(defs) != 2 {
+			t.Fatalf("defs = %d, want 2: %+v", len(defs), defs)
+		}
+		for _, d := range defs {
+			if !d.NeedsKey {
+				t.Errorf("provider %s should need a key", d.Name)
+			}
+		}
+	})
+
+	t.Run("adds configured providers missing from the catalog", func(t *testing.T) {
+		defs := providerDefs([]nenya.ProviderCatalogEntry{{Provider: "anthropic", Model: "m"}}, []string{"openai"})
+		found := false
+		for _, d := range defs {
+			if d.Name == "openai" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("configured provider openai missing: %+v", defs)
+		}
+	})
+
+	t.Run("falls back to the builtin shim when empty", func(t *testing.T) {
+		defs := providerDefs(nil, nil)
+		if len(defs) == 0 {
+			t.Fatal("expected the builtin provider shim")
+		}
+	})
+}
+
 func TestParseAgentsMode(t *testing.T) {
 	cases := []struct {
 		in   string

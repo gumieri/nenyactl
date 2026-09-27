@@ -69,9 +69,12 @@ func runAgents(cmd *cobra.Command, args []string) error {
 
 	desc, err := client.Describe(cmd.Context())
 	if err != nil {
-		return err
+		return fmt.Errorf("agents requires `nenya describe --json` (contract target): %w", err)
 	}
-	catalog := agents.CatalogFromDescribe(catalogPairs(desc.Providers.Catalog), desc.Providers.Configured)
+	catalog := agents.CatalogFromDescribe(catalogPairs(desc.Providers.Catalog))
+	if len(catalog.Models) == 0 {
+		return fmt.Errorf("nenya reported no providers or models; configure a provider key first (nenyactl secret set --provider <name> <key>)")
+	}
 
 	useAuto, cfg, err := agents.RunAgentEditor(catalog)
 	if err != nil {
@@ -101,17 +104,21 @@ func runAgents(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("encode agents: %w", err)
 	}
+
+	// Disable auto-agents first: the safer partial state is custom agents
+	// present with auto still on (depends on what nenya does with both) than
+	// auto off with the previous agents list. Each write reports its own path.
+	discoveryPath, err := client.SetConfig(cmd.Context(), "discovery.auto_agents", "false")
+	if err != nil {
+		return fmt.Errorf("disable auto-agents: %w", err)
+	}
+	fmt.Println(successStyle.Render("✓"), "Auto-agents disabled →", discoveryPath)
+
 	path, err := client.SetConfig(cmd.Context(), "agents", string(agentsJSON))
 	if err != nil {
 		return fmt.Errorf("write agents: %w", err)
 	}
 	fmt.Println(successStyle.Render("✓"), "Custom agents saved →", path)
-
-	if path, err := client.SetConfig(cmd.Context(), "discovery.auto_agents", "false"); err != nil {
-		return fmt.Errorf("disable auto-agents: %w", err)
-	} else {
-		fmt.Println(successStyle.Render("✓"), "Auto-agents disabled →", path)
-	}
 
 	return nil
 }
