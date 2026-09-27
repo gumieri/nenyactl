@@ -15,6 +15,7 @@ import (
 // the contract. It lets the secret commands be tested without a nenya binary.
 type recordingRunner struct {
 	calls  [][]string
+	env    []string
 	out    []byte
 	err    error
 	onCall func(args []string)
@@ -29,6 +30,13 @@ func (r *recordingRunner) Output(_ context.Context, args ...string) ([]byte, err
 		return nil, r.err
 	}
 	return r.out, nil
+}
+
+// WithEnv makes recordingRunner an EnvRunner so SecretWriterFor's
+// NENYA_SECRETS_DIR targeting can be asserted.
+func (r *recordingRunner) WithEnv(env ...string) nenya.Runner {
+	r.env = append(r.env, env...)
+	return r
 }
 
 // fakeContract points newContractClient at rr for the test and returns a pointer
@@ -128,6 +136,9 @@ func TestRunSecretBootstrap(t *testing.T) {
 		want := []string{"secret", "set", "--client-token"}
 		if strings.Join(rr.calls[0], " ") != strings.Join(want, " ") {
 			t.Errorf("call = %v, want %v", rr.calls[0], want)
+		}
+		if len(rr.env) != 1 || rr.env[0] != "NENYA_SECRETS_DIR="+tmp {
+			t.Errorf("env = %v, want NENYA_SECRETS_DIR=%s", rr.env, tmp)
 		}
 	})
 

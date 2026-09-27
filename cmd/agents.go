@@ -84,6 +84,8 @@ func runAgents(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// An absent or nil agents value would marshal to null and wipe the
+	// configured agents, so refuse rather than send `config set agents null`.
 	agentsCfg, ok := cfg["agents"]
 	if !ok || agentsCfg == nil {
 		return fmt.Errorf("no agents configured to save")

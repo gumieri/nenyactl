@@ -118,7 +118,10 @@ var secretSetCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Long: `Set a provider API key through nenya's single writer (nenya secret set),
 which chooses the secrets file, writes atomically, and fails closed when a
-systemd credential source is active.`,
+systemd credential source is active.
+
+The key is passed to nenya as a command argument, so it is visible in the
+process list; prefix the command with a space to keep it out of shell history.`,
 	RunE: runSecretSet,
 }
 

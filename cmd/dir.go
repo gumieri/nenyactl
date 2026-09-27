@@ -89,9 +89,9 @@ func (r dirResolution) Contract() *nenya.Client {
 }
 
 // newContractClient builds the nenya contract client for a config directory. It
-// is not safe for parallel tests: tests swap it and must run sequentially.
 // is a package variable so tests can inject a fake Runner and exercise the
-// command wiring without a nenya binary installed.
+// command wiring without a nenya binary installed. It is not safe for parallel
+// tests: tests swap it and must run sequentially.
 var newContractClient = func(dir string) *nenya.Client {
 	return nenya.New(nenya.Binary{}).WithConfigDir(dir)
 }

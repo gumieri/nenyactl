@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gumieri/nenyactl/internal/jsonc"
@@ -109,16 +110,13 @@ func TestApplyEdit(t *testing.T) {
 	if got != "500000" {
 		t.Errorf("got %q, want 500000", got)
 	}
+	if change := m.changes["governance.ratelimit_max_tpm"]; change != "500000" {
+		t.Errorf("recorded change = %q, want 500000", change)
+	}
 }
 
 func TestApplyEditPreservesComments(t *testing.T) {
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "config.json")
-	if err := os.WriteFile(path, []byte(testConfig), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := jsonc.ReadFile(path)
+	cfg, err := jsonc.ParseDoc([]byte(testConfig))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,17 +127,13 @@ func TestApplyEditPreservesComments(t *testing.T) {
 	m.editInput.SetValue("500000")
 	m.applyEdit()
 
-	packed := m.config.Pack()
+	packed := string(m.config.Pack())
 	if len(packed) == 0 {
-		t.Error("packed should not be empty")
+		t.Fatal("packed should not be empty")
 	}
-
-	cfg2, err := jsonc.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+	if !strings.Contains(packed, "// Server") {
+		t.Errorf("comments were not preserved:\n%s", packed)
 	}
-
-	_ = cfg2
 }
 
 func TestIsSectionObject(t *testing.T) {

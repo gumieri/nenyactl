@@ -57,6 +57,10 @@ func runConfigInit(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// bootstrapConfig is the documented bootstrap shim: it writes
+// `<config-root>/config.json` directly because `config init` must work before a
+// nenya binary exists. The content comes from `nenya example-config` when
+// available, else install's minimal shim, so nenyactl never embeds a copy.
 func bootstrapConfig(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)

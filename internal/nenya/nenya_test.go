@@ -93,14 +93,24 @@ func TestDescribeConfigNull(t *testing.T) {
 	}
 }
 
-func TestDescribeTargetsConfigFile(t *testing.T) {
-	fr := &fakeRunner{out: []byte(`{}`)}
-	if _, err := New(fr).WithConfigFile("/tmp/config.json").Describe(context.Background()); err != nil {
-		t.Fatalf("Describe: %v", err)
+func TestDescribeRejectsUnsupportedContract(t *testing.T) {
+	fr := &fakeRunner{out: []byte(`{"contract_version":99}`)}
+	if _, err := New(fr).Describe(context.Background()); err == nil {
+		t.Fatal("expected an unsupported contract error")
 	}
-	want := []string{"describe", "--json", "--config", "/tmp/config.json"}
-	if !equalArgs(fr.args, want) {
-		t.Errorf("args = %v, want %v", fr.args, want)
+}
+
+func TestRunBoundedSurfacesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	probe := runnerFunc(func(ctx context.Context, _ ...string) ([]byte, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	_, err := New(probe).Describe(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
 	}
 }
 

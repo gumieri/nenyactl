@@ -13,6 +13,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/gumieri/nenyactl/internal/contract"
 )
 
 // Runner executes a nenya command and returns its standard output. It is
@@ -72,13 +74,11 @@ const (
 )
 
 // Client is a contract client bound to a Runner and, optionally, to a config
-// dir or file, so every call sees the same target.
+// directory, so every call sees the same target. nenyactl manages directory-mode
+// deployments (CONTRACT.md §5.1), so the target is always a config root.
 type Client struct {
-	runner Runner
-	// configDir/configFile pin the target; either may be empty to use nenya's
-	// own defaults.
-	configDir  string
-	configFile string
+	runner    Runner
+	configDir string
 }
 
 // New returns a Client for the given runner with no target pinned.
@@ -88,28 +88,15 @@ func New(runner Runner) *Client { return &Client{runner: runner} }
 func (c *Client) WithConfigDir(dir string) *Client {
 	cp := *c
 	cp.configDir = dir
-	cp.configFile = ""
 	return &cp
 }
 
-// WithConfigFile returns a copy of the client pinned to a single config file.
-func (c *Client) WithConfigFile(file string) *Client {
-	cp := *c
-	cp.configFile = file
-	cp.configDir = ""
-	return &cp
-}
-
-// target returns the flags that select the config root/file for a command.
+// target returns the flags that select the config root for a command.
 func (c *Client) target() []string {
-	switch {
-	case c.configFile != "":
-		return []string{"--config", c.configFile}
-	case c.configDir != "":
+	if c.configDir != "" {
 		return []string{"--config-dir", c.configDir}
-	default:
-		return nil
 	}
+	return nil
 }
 
 // output runs a read-only contract call under probeTimeout.
@@ -118,14 +105,20 @@ func (c *Client) output(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 // runBounded executes a contract call under a bounded context. A nil context is
-// normalized so a caller that bypasses cobra cannot panic the process.
+// normalized so a caller that bypasses cobra cannot panic the process, and a
+// cancelled caller context is surfaced as cancellation rather than as the
+// command's own exit error.
 func runBounded(ctx context.Context, runner Runner, timeout time.Duration, args ...string) ([]byte, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return runner.Output(ctx, args...)
+	out, err := runner.Output(ctx, args...)
+	if err != nil && ctx.Err() != nil {
+		return out, fmt.Errorf("%w: %v", ctx.Err(), err)
+	}
+	return out, err
 }
 
 // commandError builds a non-leaking error for a failed command. Secret commands
@@ -147,10 +140,13 @@ func isSecretCommand(args []string) bool {
 }
 
 // redactedArgs renders an invocation for an error message, omitting the values
-// of secret commands.
+// of secret commands and of `config set` (which can carry a secret in the value).
 func redactedArgs(args []string) string {
 	if isSecretCommand(args) {
 		return "secret set …"
+	}
+	if len(args) >= 2 && args[0] == "config" && args[1] == "set" {
+		return strings.Join(args[:len(args)-1], " ") + " <value>"
 	}
 	return strings.Join(args, " ")
 }
@@ -225,6 +221,11 @@ func (c *Client) Describe(ctx context.Context) (Description, error) {
 	if err := json.Unmarshal(out, &d); err != nil {
 		return Description{}, fmt.Errorf("parse describe --json: %w", err)
 	}
+	if d.ContractVersion != 0 {
+		if err := contract.Check(d.ContractVersion); err != nil {
+			return Description{}, err
+		}
+	}
 	if string(d.Config) == "null" {
 		d.Config = nil
 	}
@@ -253,7 +254,10 @@ type SecretWriter struct {
 	dir    string
 }
 
-// SecretWriterFor returns a SecretWriter targeting dir.
+// SecretWriterFor returns a SecretWriter targeting dir. It injects
+// NENYA_SECRETS_DIR when the runner implements EnvRunner (Binary does); a runner
+// that cannot carry environment writes through nenya's default source, so callers
+// that need targeting must supply an EnvRunner.
 func (c *Client) SecretWriterFor(dir string) SecretWriter {
 	runner := c.runner
 	if er, ok := runner.(EnvRunner); ok {
