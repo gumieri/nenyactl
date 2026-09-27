@@ -312,8 +312,9 @@ func TestDetectFromDir(t *testing.T) {
 		if info.ConfigFile != configFile {
 			t.Errorf("ConfigFile = %v, want %v", info.ConfigFile, configFile)
 		}
-		if info.ConfigD != tmp {
-			t.Errorf("ConfigD = %v, want %v", info.ConfigD, tmp)
+		wantConfigD := filepath.Join(tmp, "config", "config.d")
+		if info.ConfigD != wantConfigD {
+			t.Errorf("ConfigD = %v, want %v", info.ConfigD, wantConfigD)
 		}
 		if info.DataDir != tmp {
 			t.Errorf("DataDir = %v, want %v", info.DataDir, tmp)

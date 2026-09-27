@@ -145,7 +145,7 @@ func detectContainer() (*Info, error) {
 	info := &Info{
 		Mode:       ModeContainer,
 		ConfigFile: configFile,
-		ConfigD:    containerDir,
+		ConfigD:    filepath.Join(containerDir, "config", "config.d"),
 		DataDir:    containerDir,
 	}
 
@@ -177,7 +177,7 @@ func DetectFromDir(dir string, mode Mode) (*Info, error) {
 		return &Info{
 			Mode:       ModeContainer,
 			ConfigFile: filepath.Join(dir, "config", "config.json"),
-			ConfigD:    dir,
+			ConfigD:    filepath.Join(dir, "config", "config.d"),
 			DataDir:    dir,
 		}, nil
 	default:

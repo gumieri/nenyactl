@@ -76,7 +76,7 @@ func SystemConfigDir() string {
 func SystemBinDir() string {
 	switch runtime.GOOS {
 	case "darwin", "linux":
-		return "/usr/local/bin"
+		return "/usr/bin"
 	default:
 		if d := os.Getenv("ProgramFiles"); d != "" {
 			return filepath.Join(d, "nenya", "bin")

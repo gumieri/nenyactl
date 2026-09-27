@@ -175,8 +175,8 @@ func TestCopyFromExtract(t *testing.T) {
 			t.Fatalf("write: %v", err)
 		}
 
-		paths := map[string]string{
-			"deploy/test.txt": filepath.Join(dstBase, "output.txt"),
+		paths := []extractFile{
+			{"deploy/test.txt", filepath.Join(dstBase, "output.txt")},
 		}
 
 		if err := copyFromExtract(extractDir, paths); err != nil {
@@ -196,8 +196,8 @@ func TestCopyFromExtract(t *testing.T) {
 		extractDir := t.TempDir()
 		dstBase := t.TempDir()
 
-		paths := map[string]string{
-			"deploy/missing.txt": filepath.Join(dstBase, "output.txt"),
+		paths := []extractFile{
+			{"deploy/missing.txt", filepath.Join(dstBase, "output.txt")},
 		}
 
 		err := copyFromExtract(extractDir, paths)

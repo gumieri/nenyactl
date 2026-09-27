@@ -48,13 +48,13 @@ func TestPublishedPort(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to .env PORT", func(t *testing.T) {
+	t.Run("defaults when compose has no ports block", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("NENYA_IMAGE=x\nPORT=7070\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "compose.yml"), []byte("services:\n  nenya:\n    image: x\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if got := PublishedPort(dir); got != "7070" {
-			t.Errorf("PublishedPort = %q, want 7070", got)
+		if got := PublishedPort(dir); got != "8080" {
+			t.Errorf("PublishedPort = %q, want 8080", got)
 		}
 	})
 
@@ -83,6 +83,18 @@ func TestClientToken(t *testing.T) {
 
 	t.Run("falls back to secrets.json", func(t *testing.T) {
 		dir := t.TempDir()
+		_ = os.WriteFile(filepath.Join(dir, "secrets.json"), []byte(`{"client_token":"nk-single"}`), 0o600)
+		if got := ClientToken(dir); got != "nk-single" {
+			t.Errorf("ClientToken = %q, want nk-single", got)
+		}
+	})
+
+	t.Run("falls back to secrets.json when secrets dir yields no token", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "secrets"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.WriteFile(filepath.Join(dir, "secrets", "01-providers.json"), []byte(`{"provider_keys":{}}`), 0o600)
 		_ = os.WriteFile(filepath.Join(dir, "secrets.json"), []byte(`{"client_token":"nk-single"}`), 0o600)
 		if got := ClientToken(dir); got != "nk-single" {
 			t.Errorf("ClientToken = %q, want nk-single", got)

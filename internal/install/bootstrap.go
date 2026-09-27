@@ -31,15 +31,15 @@ type installPaths struct {
 }
 
 // resolveInstallPaths determines where config, secrets, and units live. It
-// prefers `nenya paths --json` (contract target) for the config root and falls
-// back to nenyactl's platform defaults until that command ships.
-func resolveInstallPaths(ctx context.Context, cfg Config, runner CommandRunner, execPath string) installPaths {
+// prefers `nenya paths --json` (contract target) for the config root/file and
+// falls back to platform defaults until that command ships.
+func resolveInstallPaths(ctx context.Context, cfg Config, runner CommandRunner, execPath string) (installPaths, error) {
 	if cfg.UserInstall {
 		dir := cfg.configDirOverride
 		if dir == "" {
 			d, err := userConfigDir()
 			if err != nil {
-				d = filepath.Join(".nenyactl", "nenya")
+				return installPaths{}, fmt.Errorf("resolve user config dir: %w", err)
 			}
 			dir = d
 		}
@@ -47,15 +47,24 @@ func resolveInstallPaths(ctx context.Context, cfg Config, runner CommandRunner, 
 			configDir:   dir,
 			configFile:  filepath.Join(dir, "config.json"),
 			secretsFile: filepath.Join(dir, "secrets.json"),
-		}
+		}, nil
 	}
 
 	dir := cfg.configDirOverride
+	configFile := ""
 	if dir == "" {
 		dir = systemConfigDir()
 	}
-	if p, ok := queryNenyaPaths(ctx, runner, execPath); ok && p.ConfigDir != "" {
-		dir = p.ConfigDir
+	if p, ok := queryNenyaPaths(ctx, runner, execPath); ok {
+		if p.ConfigDir != "" {
+			dir = p.ConfigDir
+		}
+		if p.ConfigFile != "" {
+			configFile = p.ConfigFile
+		}
+	}
+	if configFile == "" {
+		configFile = filepath.Join(dir, "config.json")
 	}
 
 	unitDir := cfg.unitDirOverride
@@ -65,10 +74,10 @@ func resolveInstallPaths(ctx context.Context, cfg Config, runner CommandRunner, 
 
 	return installPaths{
 		configDir:   dir,
-		configFile:  filepath.Join(dir, "config.json"),
+		configFile:  configFile,
 		secretsFile: filepath.Join(dir, "secrets.json"),
 		unitDir:     unitDir,
-	}
+	}, nil
 }
 
 // nenyaPaths mirrors the `nenya paths --json` shape (CONTRACT.md §4.2).
@@ -101,6 +110,8 @@ func queryNenyaPaths(ctx context.Context, runner CommandRunner, execPath string)
 func bootstrapConfig(ctx context.Context, runner CommandRunner, execPath string, p installPaths) (bool, error) {
 	if _, err := os.Stat(p.configFile); err == nil {
 		return false, nil
+	} else if !os.IsNotExist(err) {
+		return false, fmt.Errorf("stat %s: %w", p.configFile, err)
 	}
 
 	content := []byte(minimalConfig)
@@ -111,19 +122,17 @@ func bootstrapConfig(ctx context.Context, runner CommandRunner, execPath string,
 	if err := os.MkdirAll(p.configDir, 0o755); err != nil {
 		return false, fmt.Errorf("create config dir %s: %w", p.configDir, err)
 	}
-	if err := os.WriteFile(p.configFile, content, 0o644); err != nil {
-		return false, fmt.Errorf("write %s: %w", p.configFile, err)
-	}
-	fmt.Printf("Created %s\n", p.configFile)
-	return true, nil
+	return writeNewFile(p.configFile, content, 0o644)
 }
 
 // bootstrapSecrets creates secrets.json with a fresh client token when absent.
 // Existing secrets are never overwritten, so an install cannot rotate a token.
-// The token is not printed.
+// The token is deliberately not printed.
 func bootstrapSecrets(p installPaths) (bool, error) {
 	if _, err := os.Stat(p.secretsFile); err == nil {
 		return false, nil
+	} else if !os.IsNotExist(err) {
+		return false, fmt.Errorf("stat %s: %w", p.secretsFile, err)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(p.secretsFile), 0o755); err != nil {
@@ -137,11 +146,27 @@ func bootstrapSecrets(p installPaths) (bool, error) {
 		return false, fmt.Errorf("marshal secrets: %w", err)
 	}
 	content = append(content, '\n')
+	return writeNewFile(p.secretsFile, content, 0o600)
+}
 
-	if err := os.WriteFile(p.secretsFile, content, 0o600); err != nil {
-		return false, fmt.Errorf("write %s: %w", p.secretsFile, err)
+// writeNewFile writes content to path only if it does not already exist, using
+// O_EXCL to avoid racing or clobbering a file created concurrently.
+func writeNewFile(path string, content []byte, mode os.FileMode) (bool, error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		if os.IsExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("create %s: %w", path, err)
 	}
-	fmt.Printf("Created %s (mode 0600)\n", p.secretsFile)
+	if _, err := f.Write(content); err != nil {
+		_ = f.Close()
+		return false, fmt.Errorf("write %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		return false, fmt.Errorf("close %s: %w", path, err)
+	}
+	fmt.Printf("Created %s (mode %04o)\n", path, mode.Perm())
 	return true, nil
 }
 
@@ -155,21 +180,21 @@ func enableService(ctx context.Context, runner CommandRunner, unitDir string) {
 	case isLaunchd(unitDir):
 		plist := filepath.Join(unitDir, "com.gumieri.nenya.plist")
 		if _, err := runner.Output(ctx, launchctlBin, "load", "-w", plist); err != nil {
-			warnService("load %s: %v", plist, err)
+			warnService("sudo launchctl load -w "+plist, "load %s: %v", plist, err)
 		}
 	case isSystemd(unitDir):
 		if _, err := runner.Output(ctx, systemctlBin, "daemon-reload"); err != nil {
-			warnService("systemctl daemon-reload: %v", err)
+			warnService("sudo systemctl daemon-reload", "systemctl daemon-reload: %v", err)
 		}
 		if _, err := runner.Output(ctx, systemctlBin, "enable", "--now", "nenya.socket"); err != nil {
-			warnService("systemctl enable --now nenya.socket: %v", err)
+			warnService("sudo systemctl enable --now nenya.socket", "systemctl enable --now nenya.socket: %v", err)
 		}
 	}
 }
 
-func warnService(format string, args ...any) {
+func warnService(hint, format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "Warning: could not enable the nenya service: "+format+"\n", args...)
-	fmt.Fprintln(os.Stderr, "Enable it later with: sudo systemctl enable --now nenya.socket")
+	fmt.Fprintln(os.Stderr, "Enable it later with: "+hint)
 }
 
 func isSystemd(unitDir string) bool {

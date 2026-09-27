@@ -263,7 +263,11 @@ func TestInstallUserWritesNoSystemUnits(t *testing.T) {
 	t.Cleanup(func() { systemUnitDir, systemConfigDir = savedUnit, savedConfig })
 
 	var calls []string
-	runner := multiRunner{scriptRunner{calls: &calls}}
+	dest := filepath.Join(tmp, ".local", "bin", "nenya")
+	runner := multiRunner{scriptRunner{
+		outputs: map[string]string{dest + " example-config": `{"server":{"listen_addr":":8080"}}`},
+		calls:   &calls,
+	}}
 
 	cfg := Config{Version: "v0.0.0-test", UserInstall: true, SkipVerify: true}
 	if err := InstallWithHTTPAndRunner(context.Background(), cfg, server.Client(), runner); err != nil {
@@ -290,5 +294,14 @@ func TestInstallUserWritesNoSystemUnits(t *testing.T) {
 		if _, err := os.Stat(f); err != nil {
 			t.Errorf("expected user artifact %s: %v", f, err)
 		}
+	}
+
+	data, err := os.ReadFile(filepath.Join(tmp, ".config", "nenya", "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(data, &v); err != nil {
+		t.Errorf("user config is not valid JSON: %v (%s)", err, data)
 	}
 }

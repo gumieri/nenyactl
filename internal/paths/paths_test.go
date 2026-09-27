@@ -103,23 +103,23 @@ func TestSystemConfigDir(t *testing.T) {
 }
 
 func TestSystemBinDir(t *testing.T) {
-	t.Run("linux returns /usr/local/bin", func(t *testing.T) {
+	t.Run("linux returns /usr/bin", func(t *testing.T) {
 		if runtime.GOOS != "linux" {
 			t.Skip("linux only")
 		}
 		got := SystemBinDir()
-		if got != "/usr/local/bin" {
-			t.Errorf("SystemBinDir() = %v, want /usr/local/bin", got)
+		if got != "/usr/bin" {
+			t.Errorf("SystemBinDir() = %v, want /usr/bin", got)
 		}
 	})
 
-	t.Run("darwin returns /usr/local/bin", func(t *testing.T) {
+	t.Run("darwin returns /usr/bin", func(t *testing.T) {
 		if runtime.GOOS != "darwin" {
 			t.Skip("darwin only")
 		}
 		got := SystemBinDir()
-		if got != "/usr/local/bin" {
-			t.Errorf("SystemBinDir() = %v, want /usr/local/bin", got)
+		if got != "/usr/bin" {
+			t.Errorf("SystemBinDir() = %v, want /usr/bin", got)
 		}
 	})
 

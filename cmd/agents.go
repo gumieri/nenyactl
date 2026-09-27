@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/gumieri/nenyactl/internal/agents"
 	"github.com/gumieri/nenyactl/internal/detect"
@@ -37,15 +38,23 @@ func runAgents(cmd *cobra.Command, args []string) error {
 	var info *detect.Info
 	var err error
 
+	if agentsMode != "" && agentsDir == "" {
+		return fmt.Errorf("--mode requires --dir")
+	}
+
 	if agentsDir != "" {
 		if _, statErr := os.Stat(agentsDir); statErr != nil {
 			return fmt.Errorf("--dir: %w", statErr)
 		}
-		mode, modeErr := resolveAgentsMode(agentsDir)
-		if modeErr != nil {
-			return modeErr
+		if agentsMode == "" {
+			info, err = detect.DetectFromDirAuto(agentsDir)
+		} else {
+			mode, modeErr := parseAgentsMode(agentsMode)
+			if modeErr != nil {
+				return modeErr
+			}
+			info, err = detect.DetectFromDir(agentsDir, mode)
 		}
-		info, err = detect.DetectFromDir(agentsDir, mode)
 		if err != nil {
 			return err
 		}
@@ -73,6 +82,7 @@ func runAgents(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	warnAgentsDropIn(info)
 	if err := agents.WriteAgentsConfig(info.ConfigD, cfg); err != nil {
 		return fmt.Errorf("write agents config: %w", err)
 	}
@@ -86,17 +96,33 @@ func runAgents(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// resolveAgentsMode returns the mode to use for --dir: an explicit --mode value
-// wins, otherwise the mode is inferred from the layout inside dir.
-func resolveAgentsMode(dir string) (detect.Mode, error) {
-	switch agentsMode {
-	case "":
-		return detect.ModeForDir(dir), nil
+// parseAgentsMode maps an explicit --mode value to a detect.Mode.
+func parseAgentsMode(mode string) (detect.Mode, error) {
+	switch mode {
 	case "bare-metal":
 		return detect.ModeBareMetal, nil
 	case "container":
 		return detect.ModeContainer, nil
 	default:
-		return detect.ModeNone, fmt.Errorf("--mode: invalid value %q (use bare-metal or container)", agentsMode)
+		return detect.ModeNone, fmt.Errorf("--mode: invalid value %q (use bare-metal or container)", mode)
 	}
+}
+
+// warnAgentsDropIn warns that writing config.d/20-agents.json makes nenya
+// ignore an existing config.json entirely (CONTRACT.md §5.1; the XOR is tracked
+// in NCTL "Fix config.d precedence inverted"). It does not change the write
+// strategy, which belongs to that workstream.
+func warnAgentsDropIn(info *detect.Info) {
+	if info.ConfigFile == "" || info.ConfigD == "" {
+		return
+	}
+	if _, err := os.Stat(info.ConfigFile); err != nil {
+		return
+	}
+	if entries, err := os.ReadDir(info.ConfigD); err == nil && len(entries) > 0 {
+		return // config.d is already the active layout
+	}
+	fmt.Fprintln(os.Stderr, "Warning: writing", filepath.Join(info.ConfigD, "20-agents.json"),
+		"will make nenya ignore the existing", info.ConfigFile)
+	fmt.Fprintln(os.Stderr, "until the config.d precedence issue is fixed. Back up", info.ConfigFile, "first.")
 }

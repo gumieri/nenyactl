@@ -124,9 +124,11 @@ func TestInstallVerification(t *testing.T) {
 			runner:      cosignRunner{new([]string)},
 		},
 		{
-			name:      "tampered checksum aborts",
-			checksums: strings.Repeat("0", 64) + "  " + name + "\n",
-			wantErr:   "checksum mismatch",
+			name:        "tampered checksum aborts",
+			checksums:   strings.Repeat("0", 64) + "  " + name + "\n",
+			serveBundle: true,
+			runner:      cosignRunner{new([]string)},
+			wantErr:     "checksum mismatch",
 		},
 		{
 			name:        "missing checksum entry aborts",

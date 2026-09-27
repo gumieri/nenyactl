@@ -19,9 +19,16 @@ type HTTPDoer interface {
 }
 
 const (
-	owner  = "gumieri"
-	repo   = "nenya"
-	binDir = "/usr/local/bin"
+	owner = "gumieri"
+	repo  = "nenya"
+	// binDir matches the shipped unit files' ExecStart (/usr/bin/nenya) and
+	// nenya's own installer. Installing elsewhere would enable a unit whose
+	// ExecStart does not exist.
+	binDir = "/usr/bin"
+	// defaultUnitConfigDir is the config root hardcoded by the shipped units
+	// (systemd LoadCredential and the launchd NENYA_CONFIG_DIR). Regenerate
+	// with `nenya service-unit` (contract target) for a different root.
+	defaultUnitConfigDir = "/etc/nenya"
 )
 
 // Config controls an installation.
@@ -58,10 +65,12 @@ var (
 	launchctlBin = "launchctl"
 )
 
+// Install downloads and installs nenya using http.DefaultClient.
 func Install(ctx context.Context, cfg Config) error {
 	return InstallWithHTTP(ctx, cfg, http.DefaultClient)
 }
 
+// InstallWithHTTP installs nenya using the supplied HTTP client.
 func InstallWithHTTP(ctx context.Context, cfg Config, hc HTTPDoer) error {
 	return InstallWithHTTPAndRunner(ctx, cfg, hc, defaultRunner)
 }
@@ -73,13 +82,14 @@ func InstallWithHTTPAndRunner(ctx context.Context, cfg Config, hc HTTPDoer, runn
 		return fmt.Errorf("bare-metal installation is not supported on Windows; use 'nenyactl containers setup' instead")
 	}
 
-	tag := cfg.Version
+	tag := normalizeTag(cfg.Version)
 	if tag == "" {
 		var err error
 		tag, err = FetchLatestVersionWithHTTP(ctx, hc)
 		if err != nil {
 			return fmt.Errorf("fetch latest version: %w", err)
 		}
+		tag = normalizeTag(tag)
 	}
 
 	archiveName := archiveFilename(tag, runtime.GOOS, runtime.GOARCH)
@@ -150,7 +160,15 @@ func InstallWithHTTPAndRunner(ctx context.Context, cfg Config, hc HTTPDoer, runn
 	doService := !cfg.SkipService && !cfg.UserInstall
 	doBootstrap := !cfg.SkipService
 	if doBootstrap {
-		p := resolveInstallPaths(ctx, cfg, runner, dest)
+		p, pathErr := resolveInstallPaths(ctx, cfg, runner, dest)
+		if pathErr != nil {
+			return pathErr
+		}
+
+		if doService && p.configDir != defaultUnitConfigDir {
+			fmt.Fprintf(os.Stderr, "Warning: config root is %s but the shipped unit expects %s.\n", p.configDir, defaultUnitConfigDir)
+			fmt.Fprintln(os.Stderr, "Regenerate the unit with 'nenya service-unit --config-dir "+p.configDir+"' once that command ships.")
+		}
 
 		serviceReady := true
 		if doService {
@@ -161,28 +179,50 @@ func InstallWithHTTPAndRunner(ctx context.Context, cfg Config, hc HTTPDoer, runn
 			}
 		}
 
+		bootstrapReady := true
 		if _, err := bootstrapConfig(ctx, runner, dest, p); err != nil {
+			bootstrapReady = false
 			fmt.Fprintf(os.Stderr, "Warning: could not create config: %v\n", err)
 		}
 		if _, err := bootstrapSecrets(p); err != nil {
+			bootstrapReady = false
 			fmt.Fprintf(os.Stderr, "Warning: could not create secrets: %v\n", err)
 		}
 
-		if doService && serviceReady {
+		if cfg.UserInstall && bootstrapReady {
+			fmt.Fprintf(os.Stderr, "User install is not a service. Run it with:\n  NENYA_CONFIG_DIR=%s NENYA_SECRETS_DIR=%s %s\n", p.configDir, p.configDir, dest)
+		}
+
+		switch {
+		case doService && serviceReady && bootstrapReady:
 			enableService(ctx, runner, p.unitDir)
+		case doService && !bootstrapReady:
+			fmt.Fprintln(os.Stderr, "Warning: service not enabled because config/secrets bootstrap failed.")
 		}
 	}
 
 	return nil
 }
 
-// verifyDownload verifies the archive's SHA-256 against checksums.txt and, when
-// `checksums.txt.sigstore.json` is present, verifies the checksums file with
-// cosign. Verification happens before extraction or installation.
+// verifyDownload verifies the release before extraction or installation. The
+// checksums file is first authenticated with cosign (CONTRACT.md §7.2), then
+// the archive SHA-256 is compared against it. Any mismatch aborts.
 func verifyDownload(ctx context.Context, cfg Config, hc HTTPDoer, runner CommandRunner, tag, archiveName, archivePath, workDir string) error {
 	checksumsPath := filepath.Join(workDir, "checksums.txt")
 	if err := downloadWith(ctx, checksumsURL(tag), checksumsPath, hc); err != nil {
 		return fmt.Errorf("download checksums.txt: %w", err)
+	}
+
+	if cfg.SkipVerify {
+		fmt.Fprintln(os.Stderr, "Warning: cosign signature verification skipped (--skip-verify); SHA-256 is still enforced")
+	} else {
+		bundlePath := filepath.Join(workDir, "checksums.txt.sigstore.json")
+		if err := downloadWith(ctx, sigstoreBundleURL(tag), bundlePath, hc); err != nil {
+			return fmt.Errorf("download checksums.txt.sigstore.json: %w", err)
+		}
+		if err := verifySigstoreBundle(ctx, runner, checksumsPath, bundlePath, cfg.CosignIdentityRegexp, cfg.CosignIssuer); err != nil {
+			return err
+		}
 	}
 
 	data, err := os.ReadFile(checksumsPath)
@@ -196,24 +236,27 @@ func verifyDownload(ctx context.Context, cfg Config, hc HTTPDoer, runner Command
 	if err := verifyFileChecksum(archivePath, want); err != nil {
 		return fmt.Errorf("verify %s: %w", archiveName, err)
 	}
-
-	if cfg.SkipVerify {
-		fmt.Fprintln(os.Stderr, "Warning: signature verification skipped (--skip-verify); integrity is not assured")
-		return nil
-	}
-
-	bundlePath := filepath.Join(workDir, "checksums.txt.sigstore.json")
-	if err := downloadWith(ctx, sigstoreBundleURL(tag), bundlePath, hc); err != nil {
-		return fmt.Errorf("download checksums.txt.sigstore.json: %w", err)
-	}
-	if err := verifySigstoreBundle(ctx, runner, checksumsPath, bundlePath, cfg.CosignIdentityRegexp, cfg.CosignIssuer); err != nil {
-		return err
-	}
 	return nil
+}
+
+// normalizeTag ensures a release tag keeps its conventional leading `v`, since
+// download URLs are /releases/download/vX.Y.Z/ while artifact names omit it.
+func normalizeTag(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" || strings.HasPrefix(v, "v") {
+		return v
+	}
+	return "v" + v
 }
 
 func installServiceFiles(extractDir string) error {
 	return installServiceFilesTo(extractDir, systemUnitDir())
+}
+
+// extractFile is an ordered archive member -> destination copy.
+type extractFile struct {
+	src string
+	dst string
 }
 
 // installServiceFilesTo copies the shipped unit files from the archive into
@@ -222,32 +265,32 @@ func installServiceFiles(extractDir string) error {
 func installServiceFilesTo(extractDir, unitDir string) error {
 	switch runtime.GOOS {
 	case "linux":
-		return copyFromExtract(extractDir, map[string]string{
-			"deploy/nenya.service": filepath.Join(unitDir, "nenya.service"),
-			"deploy/nenya.socket":  filepath.Join(unitDir, "nenya.socket"),
+		return copyFromExtract(extractDir, []extractFile{
+			{"deploy/nenya.service", filepath.Join(unitDir, "nenya.service")},
+			{"deploy/nenya.socket", filepath.Join(unitDir, "nenya.socket")},
 		})
 	case "darwin":
-		return copyFromExtract(extractDir, map[string]string{
-			"deploy/nenya.plist": filepath.Join(unitDir, "com.gumieri.nenya.plist"),
+		return copyFromExtract(extractDir, []extractFile{
+			{"deploy/nenya.plist", filepath.Join(unitDir, "com.gumieri.nenya.plist")},
 		})
 	}
 	return nil
 }
 
-func copyFromExtract(extractDir string, paths map[string]string) error {
-	for src, dst := range paths {
-		srcPath := filepath.Join(extractDir, src)
+func copyFromExtract(extractDir string, files []extractFile) error {
+	for _, f := range files {
+		srcPath := filepath.Join(extractDir, f.src)
 		if _, err := os.Stat(srcPath); os.IsNotExist(err) {
-			return fmt.Errorf("file not found in archive: %s", src)
+			return fmt.Errorf("file not found in archive: %s", f.src)
 		}
-		dstDir := filepath.Dir(dst)
+		dstDir := filepath.Dir(f.dst)
 		if err := os.MkdirAll(dstDir, 0o755); err != nil {
 			return fmt.Errorf("create directory %s: %w", dstDir, err)
 		}
-		if err := copyFile(srcPath, dst, 0o644); err != nil {
-			return fmt.Errorf("copy %s to %s: %w", src, dst, err)
+		if err := copyFile(srcPath, f.dst, 0o644); err != nil {
+			return fmt.Errorf("copy %s to %s: %w", f.src, f.dst, err)
 		}
-		fmt.Printf("Installed %s\n", dst)
+		fmt.Printf("Installed %s\n", f.dst)
 	}
 	return nil
 }

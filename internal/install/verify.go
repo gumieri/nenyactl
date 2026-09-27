@@ -107,16 +107,14 @@ func verifySigstoreBundle(ctx context.Context, runner CommandRunner, artifactPat
 		return fmt.Errorf("cosign is required to verify release signatures but is not available: %w", err)
 	}
 
-	out, err := runner.Output(ctx, "cosign",
+	if _, err := runner.Output(ctx, "cosign",
 		"verify-blob",
 		"--bundle", bundlePath,
 		"--certificate-identity-regexp", identityRegexp,
 		"--certificate-oidc-issuer", issuer,
 		artifactPath,
-	)
-	if err != nil {
+	); err != nil {
 		return fmt.Errorf("cosign verification failed: %w", err)
 	}
-	_ = out
 	return nil
 }

@@ -11,17 +11,14 @@ import (
 // DefaultPort is the container-internal port and the fallback published port.
 const DefaultPort = "8080"
 
-// PublishedPort returns the host port a deployment publishes. It prefers the
-// compose port mapping, then PORT in .env, then DefaultPort. It never assumes
-// 8080 when the deployment says otherwise.
+// PublishedPort returns the host port a deployment publishes, read from the
+// compose port mapping (the source of truth written by `containers setup`). It
+// falls back to DefaultPort when no mapping is present.
 func PublishedPort(dir string) string {
 	if compose, err := os.ReadFile(filepath.Join(dir, "compose.yml")); err == nil {
 		if p, ok := parsePublishedPort(string(compose)); ok {
 			return p
 		}
-	}
-	if p := envPort(filepath.Join(dir, ".env")); p != "" {
-		return p
 	}
 	return DefaultPort
 }
@@ -61,51 +58,33 @@ func leadingSpaces(s string) int {
 	return len(s) - len(strings.TrimLeft(s, " \t"))
 }
 
-// envPort reads PORT from an env file, tolerating `export PORT=...`.
-func envPort(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimPrefix(strings.TrimSpace(line), "export ")
-		if strings.HasPrefix(line, "PORT=") {
-			return strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "PORT=")), `"'`)
-		}
-	}
-	return ""
-}
-
 // ClientToken resolves the effective client_token for a container deployment.
 // It merges secrets/*.json in name order (last non-empty wins), matching
 // nenya's secrets merge (CONTRACT.md §6.2), and falls back to a single
-// secrets.json when present.
+// secrets.json when present or when the directory merge yields nothing.
 func ClientToken(dir string) string {
-	secretsDir := filepath.Join(dir, "secrets")
-	entries, err := os.ReadDir(secretsDir)
-	if err != nil {
-		if data, readErr := os.ReadFile(filepath.Join(dir, "secrets.json")); readErr == nil {
-			return tokenFromJSON(data)
-		}
-		return ""
-	}
-
-	var files []string
-	for _, entry := range entries {
-		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
-			files = append(files, filepath.Join(secretsDir, entry.Name()))
-		}
-	}
-	sort.Strings(files)
-
 	token := ""
-	for _, file := range files {
-		data, err := os.ReadFile(file)
-		if err != nil {
-			continue
+	if entries, err := os.ReadDir(filepath.Join(dir, "secrets")); err == nil {
+		var files []string
+		for _, entry := range entries {
+			if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
+				files = append(files, filepath.Join(dir, "secrets", entry.Name()))
+			}
 		}
-		if t := tokenFromJSON(data); t != "" {
-			token = t
+		sort.Strings(files)
+		for _, file := range files {
+			data, err := os.ReadFile(file)
+			if err != nil {
+				continue
+			}
+			if t := tokenFromJSON(data); t != "" {
+				token = t
+			}
+		}
+	}
+	if token == "" {
+		if data, err := os.ReadFile(filepath.Join(dir, "secrets.json")); err == nil {
+			token = tokenFromJSON(data)
 		}
 	}
 	return token
