@@ -67,8 +67,9 @@ func TestUpDeployment(t *testing.T) {
 	savedStart := upServiceRun
 	upServiceRun = func() error { return nil }
 	t.Cleanup(func() { upServiceRun = savedStart })
+	reloaded := false
 	savedReload := upServiceReload
-	upServiceReload = func() error { return nil }
+	upServiceReload = func() error { reloaded = true; return nil }
 	t.Cleanup(func() { upServiceReload = savedReload })
 
 	if err := upDeployment(context.Background(), res, fakeDoer{status: http.StatusOK}, time.Second); err != nil {
@@ -86,6 +87,11 @@ func TestUpDeployment(t *testing.T) {
 	if !found {
 		t.Errorf("expected a bare `secret set --client-token` call, got %v", rr.rec.calls)
 	}
+	// Providers were already configured, so no keys were written and no
+	// service reload should happen.
+	if reloaded {
+		t.Error("service must not reload when no provider keys were written")
+	}
 }
 
 func TestUpDeploymentCreatesMissingConfig(t *testing.T) {
@@ -102,8 +108,9 @@ func TestUpDeploymentCreatesMissingConfig(t *testing.T) {
 	savedStart := upServiceRun
 	upServiceRun = func() error { return nil }
 	t.Cleanup(func() { upServiceRun = savedStart })
+	reloaded := false
 	savedReload := upServiceReload
-	upServiceReload = func() error { return nil }
+	upServiceReload = func() error { reloaded = true; return nil }
 	t.Cleanup(func() { upServiceReload = savedReload })
 
 	if err := upDeployment(context.Background(), res, fakeDoer{status: http.StatusOK}, time.Second); err != nil {
@@ -111,6 +118,11 @@ func TestUpDeploymentCreatesMissingConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(base, "config.json")); err != nil {
 		t.Errorf("expected config.json to be created: %v", err)
+	}
+	// describe failed here (the recording runner has no describe output), so
+	// no provider keys were written and no reload should happen.
+	if reloaded {
+		t.Error("service must not reload after a failed describe")
 	}
 }
 

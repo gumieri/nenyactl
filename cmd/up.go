@@ -127,8 +127,9 @@ func upDeployment(ctx context.Context, res dirResolution, doer healthDoer, healt
 		return err
 	}
 	// Keys saved above are not loaded by an already-running service; nudge it
-	// to reload so the just-configured providers take effect.
-	if wroteKeys {
+	// to reload so the just-configured providers take effect. A container
+	// deployment reloads via the fresh `compose up`, not the host service.
+	if wroteKeys && res.Kind == dirConfigRoot {
 		if err := upServiceReload(); err != nil {
 			fmt.Println(dimStyle.Render("  (could not reload the service: " + err.Error() + ")"))
 		}
