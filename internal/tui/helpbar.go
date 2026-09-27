@@ -65,6 +65,13 @@ var KeysKeyMap = KeyMap{
 	Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 }
 
+// ValueEditKeyMap is the single-field value editor (config keys and agent
+// names): it types into an input, so only enter/esc are advertised.
+var ValueEditKeyMap = KeyMap{
+	Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "save")),
+	Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
+}
+
 // AgentsKeyMap is the agents screen: navigation, save, add, delete, toggle.
 var AgentsKeyMap = KeyMap{
 	Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),

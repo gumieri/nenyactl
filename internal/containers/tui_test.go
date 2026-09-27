@@ -128,6 +128,35 @@ func TestContainersTUI_ScreenNavigation(t *testing.T) {
 			t.Errorf("table cursor = %d, want 0", m.table.Cursor())
 		}
 	})
+
+	t.Run("down and j move the provider cursor", func(t *testing.T) {
+		m := newTUIModel()
+		updated := update(&m, tea.KeyMsg{Type: tea.KeyDown})
+		if updated.table.Cursor() != 1 {
+			t.Errorf("after down, cursor = %d, want 1", updated.table.Cursor())
+		}
+		updated = update(updated, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		if updated.table.Cursor() != 2 {
+			t.Errorf("after j, cursor = %d, want 2", updated.table.Cursor())
+		}
+		updated = update(updated, tea.KeyMsg{Type: tea.KeyUp})
+		if updated.table.Cursor() != 1 {
+			t.Errorf("after up, cursor = %d, want 1", updated.table.Cursor())
+		}
+	})
+
+	t.Run("help map varies per screen and drops navigation on inputs", func(t *testing.T) {
+		m := newTUIModel()
+		selectKeys := m.helpKeyMap()
+		if selectKeys.Toggle.Help().Key == "" {
+			t.Error("select screen should advertise the toggle key")
+		}
+		m.screen = screenKeys
+		keysScreen := m.helpKeyMap()
+		if keysScreen.Up.Help().Key != "" {
+			t.Error("keys screen must not advertise navigation")
+		}
+	})
 }
 
 func TestContainersTUI_KeysScreen(t *testing.T) {

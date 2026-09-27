@@ -116,6 +116,31 @@ func TestNewConfigModelDoesNotDuplicateAgents(t *testing.T) {
 	}
 }
 
+// updateCfg drives the model Update the way bubbletea does, returning the
+// concrete type.
+func updateCfg(m *configModel, msg tea.Msg) *configModel {
+	result, _ := m.Update(msg)
+	return result.(*configModel)
+}
+
+func TestConfigEditorValueInput(t *testing.T) {
+	cfg, err := jsonc.ParseDoc([]byte(testConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newConfigModel(cfg, []byte(testConfig))
+	m.loadSection("governance")
+	m.startEdit(0)
+	m.screen = screenEdit
+
+	// Typed characters must reach the value input (they did not before, because
+	// updateEdit returned before the outer Update forwarded the key).
+	updated := updateCfg(&m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("7")})
+	if !strings.HasSuffix(updated.editInput.Value(), "7") {
+		t.Errorf("value = %q, want it to end with the typed rune", updated.editInput.Value())
+	}
+}
+
 func TestApplyEditTopLevelScalarKey(t *testing.T) {
 	// A top-level scalar section keys its single entry by the section name, so
 	// the recorded dotted key must not become "foo.foo".

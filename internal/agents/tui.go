@@ -270,7 +270,10 @@ func (m *tuiModel) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *tuiModel) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+c", "esc":
+	case "ctrl+c":
+		m.done = true
+		return m, tea.Quit
+	case "esc":
 		if m.modelFilter.Focused() {
 			// Esc first leaves the filter, then the picker.
 			m.modelFilter.Blur()
@@ -316,10 +319,11 @@ func (m *tuiModel) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "/":
+		// "/" focuses the filter; while it is focused it is typed instead.
 		if !m.modelFilter.Focused() {
 			m.modelFilter.Focus()
+			return m, nil
 		}
-		return m, nil
 	}
 
 	// While the filter is focused, forward typed characters to it and

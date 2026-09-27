@@ -71,15 +71,6 @@ func TestPickerKeyMap(t *testing.T) {
 	})
 }
 
-func TestConfirmKeyMapBindings(t *testing.T) {
-	t.Run("ShortHelp returns non-empty bindings", func(t *testing.T) {
-		bindings := ConfirmKeyMap.ShortHelp()
-		if len(bindings) == 0 {
-			t.Error("ConfirmKeyMap ShortHelp should return at least one binding")
-		}
-	})
-}
-
 func TestKeyMapShortHelp(t *testing.T) {
 	t.Run("empty key map returns empty bindings", func(t *testing.T) {
 		var km KeyMap

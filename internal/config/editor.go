@@ -68,7 +68,6 @@ type configModel struct {
 	autoAgentsOriginal bool
 	agentsDirty        bool
 	agentCursor        int
-	editName           textinput.Model
 
 	sectionsView  viewport.Model
 	keysView      viewport.Model
@@ -130,12 +129,6 @@ func newConfigModel(cfg *hujson.Value, effective []byte) configModel {
 			isAgent: true,
 		}
 	}
-
-	// Initialize agents UI state
-	m.editName = textinput.New()
-	m.editName.Placeholder = "agent-name"
-	m.editName.CharLimit = 64
-	m.editName.Width = 40
 
 	// Agents come from the effective document (nenya describe), never from a
 	// drop-in path: the editor must not read or merge config files itself.
@@ -220,7 +213,7 @@ func (m configModel) helpKeyMap() tui.KeyMap {
 	case screenKeys:
 		return tui.KeysKeyMap
 	case screenEdit:
-		return tui.FormKeyMap
+		return tui.ValueEditKeyMap
 	default:
 		return tui.SectionsKeyMap
 	}
@@ -257,8 +250,6 @@ func (m *configModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenEdit:
 		m.editInput, _ = m.editInput.Update(msg)
-	case screenAgents:
-		m.editName, _ = m.editName.Update(msg)
 	}
 
 	return m, nil
@@ -431,6 +422,9 @@ func (m *configModel) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.screen = screenKeys
 		return m, nil
 	}
+	// Forward typed characters (and editing keys) to the value input; the
+	// early returns above prevent the outer Update from doing it.
+	m.editInput, _ = m.editInput.Update(msg)
 	return m, nil
 }
 
@@ -813,11 +807,13 @@ type EditorResult struct {
 
 func (m *configModel) startEditAgent() {
 	if m.agentCursor >= 0 && m.agentCursor < len(m.agents) {
-		// For now, agent editing is simplified - just edit the name
+		// Agent editing uses the same value input as config edits; applyEdit
+		// reads editInput, so seed and focus that (not editName).
 		m.screen = screenEdit
-		m.editName.SetValue(m.agents[m.agentCursor].Name)
-		m.editName.Focus()
 		m.editKey = "agent_name" // Marker for agent editing
+		m.editInput.SetValue(m.agents[m.agentCursor].Name)
+		m.editInput.CursorEnd()
+		m.editInput.Focus()
 	}
 }
 
