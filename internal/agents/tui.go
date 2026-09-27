@@ -22,6 +22,12 @@ const (
 	screenConfirm
 )
 
+// defaultStrategy is the strategy a new agent starts with.
+const defaultStrategy = "fallback"
+
+// Strategies are the agent routing strategies nenya accepts.
+var Strategies = []string{"fallback", "round-robin"}
+
 type Agent struct {
 	Name     string
 	Strategy string
@@ -39,6 +45,9 @@ type tuiModel struct {
 	modeAuto bool
 	agents   []Agent
 	cursor   int
+
+	// catalog is the authoritative model/provider catalog from nenya describe.
+	catalog Catalog
 
 	editName    textinput.Model
 	strategyIdx int
@@ -59,11 +68,12 @@ type tuiModel struct {
 	done bool
 }
 
-func newTUIModel() tuiModel {
+func newTUIModel(catalog Catalog) tuiModel {
 	m := tuiModel{
 		modeAuto:    true,
 		agents:      nil,
 		cursor:      0,
+		catalog:     catalog,
 		editName:    textinput.New(),
 		modelFilter: textinput.New(),
 		agentsView:  viewport.New(0, 0),
@@ -287,13 +297,22 @@ func (m *tuiModel) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// loadDefaults seeds one agent per provider in the catalog using the first
+// model of each. The set comes from nenya's effective catalog, not a hardcoded
+// registry.
 func (m *tuiModel) loadDefaults() {
 	m.agents = nil
-	for name, def := range DefaultAgents {
+	byProvider := make(map[string]string)
+	for _, cm := range m.catalog.Models {
+		if _, ok := byProvider[cm.Provider]; !ok {
+			byProvider[cm.Provider] = cm.Model
+		}
+	}
+	for provider, model := range byProvider {
 		m.agents = append(m.agents, Agent{
-			Name:     name,
-			Strategy: def.Strategy,
-			Models:   append([]string{}, def.Models...),
+			Name:     provider,
+			Strategy: defaultStrategy,
+			Models:   []string{model},
 		})
 	}
 	sort.Slice(m.agents, func(i, j int) bool {
@@ -340,9 +359,10 @@ func (m *tuiModel) removeEmptyAgent() {
 func (m *tuiModel) loadModels() {
 	filter := strings.ToLower(m.modelFilter.Value())
 	m.models = nil
-	for _, def := range Models {
-		name := def.ID
-		if filter != "" && !strings.Contains(strings.ToLower(name), filter) {
+	for _, def := range m.catalog.Models {
+		name := def.Model
+		if filter != "" && !strings.Contains(strings.ToLower(name), filter) &&
+			!strings.Contains(strings.ToLower(def.Provider), filter) {
 			continue
 		}
 		sel := false
@@ -737,8 +757,13 @@ func trunc(s string, max int) string {
 	return s[:max-3] + "..."
 }
 
-func RunAgentEditor() (bool, map[string]any, error) {
-	m := newTUIModel()
+// RunAgentEditor runs the agent configuration TUI against the authoritative
+// model/provider catalog (from `nenya describe --json`). It returns whether the
+// user chose auto-agents and, otherwise, the config changes to apply. The
+// returned map carries only the "agents" key; discovery.auto_agents is applied
+// by the caller through nenya's single writer, so it is not duplicated here.
+func RunAgentEditor(catalog Catalog) (bool, map[string]any, error) {
+	m := newTUIModel(catalog)
 	p := tea.NewProgram(&m, tea.WithAltScreen())
 	result, err := p.Run()
 	if err != nil {
@@ -766,19 +791,5 @@ func RunAgentEditor() (bool, map[string]any, error) {
 		}
 	}
 
-	cfg := map[string]any{
-		"agents":    agentsMap,
-		"discovery": map[string]any{"auto_agents": false},
-	}
-
-	return false, cfg, nil
-}
-
-func init() {
-	sort.Slice(Models, func(i, j int) bool {
-		if Models[i].Provider != Models[j].Provider {
-			return Models[i].Provider < Models[j].Provider
-		}
-		return Models[i].ID < Models[j].ID
-	})
+	return false, map[string]any{"agents": agentsMap}, nil
 }

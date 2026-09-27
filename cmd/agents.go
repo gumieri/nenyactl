@@ -6,6 +6,7 @@ import (
 
 	"github.com/gumieri/nenyactl/internal/agents"
 	"github.com/gumieri/nenyactl/internal/detect"
+	"github.com/gumieri/nenyactl/internal/nenya"
 	"github.com/spf13/cobra"
 )
 
@@ -66,7 +67,13 @@ func runAgents(cmd *cobra.Command, args []string) error {
 
 	client := res.Contract()
 
-	useAuto, cfg, err := agents.RunAgentEditor()
+	desc, err := client.Describe(cmd.Context())
+	if err != nil {
+		return err
+	}
+	catalog := agents.CatalogFromDescribe(catalogPairs(desc.Providers.Catalog), desc.Providers.Configured)
+
+	useAuto, cfg, err := agents.RunAgentEditor(catalog)
 	if err != nil {
 		return err
 	}
@@ -107,6 +114,17 @@ func runAgents(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// catalogPairs flattens the describe provider catalog into (provider, model)
+// pairs for the agents picker, so the picker stays independent of the contract
+// client's types.
+func catalogPairs(catalog []nenya.ProviderCatalogEntry) [][2]string {
+	pairs := make([][2]string, 0, len(catalog))
+	for _, e := range catalog {
+		pairs = append(pairs, [2]string{e.Provider, e.Model})
+	}
+	return pairs
 }
 
 // parseAgentsMode maps an explicit --mode value to a detect.Mode.

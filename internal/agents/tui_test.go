@@ -11,9 +11,21 @@ func update(m *tuiModel, msg tea.Msg) *tuiModel {
 	return result.(*tuiModel)
 }
 
+// testCatalog is a small catalog so the TUI tests exercise real provider/model
+// rows without a nenya binary.
+func testCatalog() Catalog {
+	return CatalogFromDescribe([][2]string{
+		{"anthropic", "claude-sonnet-4-5"},
+		{"gemini", "gemini-2.5-flash"},
+		{"openai", "gpt-5"},
+	}, nil)
+}
+
+func newTestModel() tuiModel { return newTUIModel(testCatalog()) }
+
 func TestAgentsTUI_Init(t *testing.T) {
 	t.Run("Init returns nil", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		cmd := m.Init()
 		if cmd != nil {
 			t.Error("Init() should return nil")
@@ -23,7 +35,7 @@ func TestAgentsTUI_Init(t *testing.T) {
 
 func TestAgentsTUI_NewModel(t *testing.T) {
 	t.Run("creates model with auto mode on", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		if !m.modeAuto {
 			t.Error("expected modeAuto to be true")
 		}
@@ -38,7 +50,7 @@ func TestAgentsTUI_NewModel(t *testing.T) {
 
 func TestAgentsTUI_Quit(t *testing.T) {
 	t.Run("ctrl+c quits", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		updated := update(&m, tea.KeyMsg{Type: tea.KeyCtrlC})
 		if !updated.done {
 			t.Error("expected done flag to be set")
@@ -46,7 +58,7 @@ func TestAgentsTUI_Quit(t *testing.T) {
 	})
 
 	t.Run("q quits", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		updated := update(&m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
 		if !updated.done {
 			t.Error("expected done flag to be set")
@@ -54,7 +66,7 @@ func TestAgentsTUI_Quit(t *testing.T) {
 	})
 
 	t.Run("esc quits", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		updated := update(&m, tea.KeyMsg{Type: tea.KeyEsc})
 		if !updated.done {
 			t.Error("expected done flag to be set")
@@ -64,7 +76,7 @@ func TestAgentsTUI_Quit(t *testing.T) {
 
 func TestAgentsTUI_AutoMode(t *testing.T) {
 	t.Run("space toggles auto mode off when on", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		m.modeAuto = true
 		m.loadDefaults()
 		update(&m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" ")})
@@ -74,7 +86,7 @@ func TestAgentsTUI_AutoMode(t *testing.T) {
 	})
 
 	t.Run("space on auto mode with no agents toggles and quits", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		m.modeAuto = false
 		m.agents = nil
 		update(&m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" ")})
@@ -89,7 +101,7 @@ func TestAgentsTUI_AutoMode(t *testing.T) {
 
 func TestAgentsTUI_CursorMovement(t *testing.T) {
 	t.Run("down key moves cursor down", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		m.loadDefaults()
 		update(&m, tea.KeyMsg{Type: tea.KeyDown})
 		if m.cursor != 1 {
@@ -98,7 +110,7 @@ func TestAgentsTUI_CursorMovement(t *testing.T) {
 	})
 
 	t.Run("up key moves cursor up", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		m.loadDefaults()
 		m.cursor = 1
 		update(&m, tea.KeyMsg{Type: tea.KeyUp})
@@ -108,7 +120,7 @@ func TestAgentsTUI_CursorMovement(t *testing.T) {
 	})
 
 	t.Run("cursor does not go below 0", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		m.loadDefaults()
 		update(&m, tea.KeyMsg{Type: tea.KeyUp})
 		if m.cursor != 0 {
@@ -119,7 +131,7 @@ func TestAgentsTUI_CursorMovement(t *testing.T) {
 
 func TestAgentsTUI_AddAgent(t *testing.T) {
 	t.Run("a key starts new agent", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		m.loadDefaults()
 		count := len(m.agents)
 		update(&m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
@@ -132,7 +144,7 @@ func TestAgentsTUI_AddAgent(t *testing.T) {
 	})
 
 	t.Run("enter on add new agent line starts new agent", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		m.loadDefaults()
 		m.cursor = len(m.agents) // cursor at "add new" line
 		count := len(m.agents)
@@ -146,7 +158,7 @@ func TestAgentsTUI_AddAgent(t *testing.T) {
 	})
 
 	t.Run("enter on agent enters edit screen", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		m.loadDefaults()
 		update(&m, tea.KeyMsg{Type: tea.KeyEnter})
 		if m.screen != screenEdit {
@@ -157,7 +169,7 @@ func TestAgentsTUI_AddAgent(t *testing.T) {
 
 func TestAgentsTUI_EditScreen(t *testing.T) {
 	t.Run("esc cancels edit", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		m.loadDefaults()
 		update(&m, tea.KeyMsg{Type: tea.KeyEnter})
 		update(&m, tea.KeyMsg{Type: tea.KeyEsc})
@@ -167,7 +179,7 @@ func TestAgentsTUI_EditScreen(t *testing.T) {
 	})
 
 	t.Run("enter cycles through edit cursors", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		m.loadDefaults()
 		update(&m, tea.KeyMsg{Type: tea.KeyEnter})
 		update(&m, tea.KeyMsg{Type: tea.KeyEnter})
@@ -185,7 +197,7 @@ func TestAgentsTUI_EditScreen(t *testing.T) {
 	})
 
 	t.Run("tab cycles edit cursor", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		m.loadDefaults()
 		update(&m, tea.KeyMsg{Type: tea.KeyEnter})
 		update(&m, tea.KeyMsg{Type: tea.KeyTab})
@@ -201,7 +213,7 @@ func TestAgentsTUI_EditScreen(t *testing.T) {
 
 func TestAgentsTUI_StrategyNavigation(t *testing.T) {
 	t.Run("down key changes strategy down", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		m.loadDefaults()
 		update(&m, tea.KeyMsg{Type: tea.KeyEnter})
 		update(&m, tea.KeyMsg{Type: tea.KeyEnter}) // advance to strategy field
@@ -216,7 +228,7 @@ func TestAgentsTUI_StrategyNavigation(t *testing.T) {
 
 func TestAgentsTUI_DeleteAgent(t *testing.T) {
 	t.Run("d key initiates delete", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		m.loadDefaults()
 		m.cursor = 1
 		update(&m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
@@ -226,7 +238,7 @@ func TestAgentsTUI_DeleteAgent(t *testing.T) {
 	})
 
 	t.Run("y confirms delete", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		m.loadDefaults()
 		count := len(m.agents)
 		m.cursor = 1
@@ -241,7 +253,7 @@ func TestAgentsTUI_DeleteAgent(t *testing.T) {
 	})
 
 	t.Run("n cancels delete", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		m.loadDefaults()
 		count := len(m.agents)
 		m.cursor = 1
@@ -258,7 +270,7 @@ func TestAgentsTUI_DeleteAgent(t *testing.T) {
 
 func TestAgentsTUI_PickerScreen(t *testing.T) {
 	t.Run("esc returns to edit from picker", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		m.loadDefaults()
 		update(&m, tea.KeyMsg{Type: tea.KeyEnter})
 		update(&m, tea.KeyMsg{Type: tea.KeyEnter})
@@ -271,7 +283,7 @@ func TestAgentsTUI_PickerScreen(t *testing.T) {
 	})
 
 	t.Run("enter returns to edit from picker", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		m.loadDefaults()
 		update(&m, tea.KeyMsg{Type: tea.KeyEnter})
 		update(&m, tea.KeyMsg{Type: tea.KeyEnter})
@@ -286,7 +298,7 @@ func TestAgentsTUI_PickerScreen(t *testing.T) {
 
 func TestAgentsTUI_WindowSize(t *testing.T) {
 	t.Run("updates dimensions", func(t *testing.T) {
-		m := newTUIModel()
+		m := newTestModel()
 		msg := tea.WindowSizeMsg{Width: 100, Height: 50}
 		update(&m, msg)
 		if m.width != 100 {
