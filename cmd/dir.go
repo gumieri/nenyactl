@@ -89,15 +89,11 @@ func (r dirResolution) Contract() *nenya.Client {
 }
 
 // newContractClient builds the nenya contract client for a config directory. It
+// is not safe for parallel tests: tests swap it and must run sequentially.
 // is a package variable so tests can inject a fake Runner and exercise the
 // command wiring without a nenya binary installed.
 var newContractClient = func(dir string) *nenya.Client {
 	return nenya.New(nenya.Binary{}).WithConfigDir(dir)
-}
-
-// ContractForDir returns a client pinned to an explicit config directory.
-func contractForDir(dir string) *nenya.Client {
-	return newContractClient(dir)
 }
 
 func configRoot(dir string) dirResolution {
@@ -123,4 +119,19 @@ func containerRoot(dir string) dirResolution {
 			DataDir:    dir,
 		},
 	}
+}
+
+// detectedResolution converts an auto-detected install into a dirResolution.
+// The deployment root is the container data dir or the config file's directory,
+// never the config file itself.
+func detectedResolution(info *detect.Info) dirResolution {
+	root := filepath.Dir(info.ConfigFile)
+	kind := dirConfigRoot
+	if info.Mode == detect.ModeContainer {
+		kind = dirContainerRoot
+		if info.DataDir != "" {
+			root = info.DataDir
+		}
+	}
+	return dirResolution{Path: root, Kind: kind, Info: info}
 }

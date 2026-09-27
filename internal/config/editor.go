@@ -29,7 +29,6 @@ const (
 type sectionInfo struct {
 	name    string
 	isAgent bool
-	source  string // file origin, empty for agent section
 }
 
 type configEntry struct {
@@ -53,7 +52,6 @@ type configModel struct {
 	editInput     textinput.Model
 	activeSection string
 
-	// multi-file tracking
 	// changes records edited top-level entries as dotted key -> raw JSON
 	// value. It is the only output of the editor: every change is applied by
 	// the caller through nenya's single writer (nenya config set), so nenyactl
@@ -78,7 +76,7 @@ type configModel struct {
 	quit  bool
 }
 
-func newConfigModel(cfg *hujson.Value, effective []byte, displayPath string) configModel {
+func newConfigModel(cfg *hujson.Value, effective []byte) configModel {
 	sections := jsonc.TopLevelKeys(cfg)
 
 	m := configModel{
@@ -100,8 +98,8 @@ func newConfigModel(cfg *hujson.Value, effective []byte, displayPath string) con
 	// Fill sections array
 	for i, key := range sections {
 		m.sections[i] = sectionInfo{
-			name:   key,
-			source: displayPath,
+			name:    key,
+			isAgent: false,
 		}
 	}
 	// Add agents section at the end
@@ -150,6 +148,15 @@ func agentsFromEffective(effective []byte) ([]agentEntry, bool) {
 	}
 	sort.Strings(names)
 
+	auto := false
+	if doc.Discovery.AutoAgents != nil {
+		auto = *doc.Discovery.AutoAgents
+	}
+
+	if len(names) == 0 {
+		return nil, auto
+	}
+
 	agents := make([]agentEntry, 0, len(names))
 	for _, name := range names {
 		a := doc.Agents[name]
@@ -160,10 +167,6 @@ func agentsFromEffective(effective []byte) ([]agentEntry, bool) {
 		agents = append(agents, agentEntry{Name: name, Strategy: strategy, Models: a.Models})
 	}
 
-	auto := false
-	if doc.Discovery.AutoAgents != nil {
-		auto = *doc.Discovery.AutoAgents
-	}
 	return agents, auto
 }
 
@@ -291,7 +294,6 @@ func (m *configModel) updateAgents(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "s":
 		m.saved = true
-		m.agentsDirty = false
 		return m, tea.Quit
 	case " ":
 		m.agentsModeAuto = !m.agentsModeAuto
@@ -374,7 +376,7 @@ func (m *configModel) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *configModel) startEdit(idx int) {
-	if idx >= len(m.entries) {
+	if idx < 0 || idx >= len(m.entries) {
 		return
 	}
 	entry := m.entries[idx]
@@ -403,7 +405,7 @@ func (m *configModel) applyEdit() {
 		return
 	}
 
-	if len(m.entries) == 0 {
+	if len(m.entries) == 0 || m.cursor < 0 || m.cursor >= len(m.entries) {
 		return
 	}
 
@@ -420,7 +422,8 @@ func (m *configModel) applyEdit() {
 	entry.Value.Value = parseLiteralValue(raw)
 
 	// Record the change by dotted key; the caller applies it through nenya's
-	// single writer. nenyactl does not choose the target file or merge.
+	// single writer. nenyactl does not choose the target file or merge. Config
+	// keys are fixed identifiers without dots, so the dotted form is unambiguous.
 	m.changes[m.activeSection+"."+entry.Key] = string(parseLiteralValue(raw))
 }
 
@@ -567,7 +570,12 @@ func (m configModel) viewEdit() string {
 		inputView = theme.InputBlurred.Render(inputView)
 	}
 
-	currentVal := theme.Dimmed.Render("Current: " + jsonc.FieldValueString(m.entries[m.cursor].Value))
+	// Agent-name edits leave m.entries from the previous section, so only show a
+	// "Current:" line when the cursor actually addresses an entry.
+	var currentVal string
+	if m.editKey != "agent_name" && m.cursor >= 0 && m.cursor < len(m.entries) {
+		currentVal = theme.Dimmed.Render("Current: " + jsonc.FieldValueString(m.entries[m.cursor].Value))
+	}
 
 	body := lipgloss.JoinVertical(lipgloss.Top, title, "", currentVal, "", inputView, "", theme.Dimmed.Render("Enter to save · Esc to cancel"))
 
@@ -737,9 +745,6 @@ func isSectionObject(v *hujson.Value) bool {
 type EditorResult struct {
 	// Changes maps a dotted config key to its raw JSON value.
 	Changes map[string]string
-	// AgentsDirty reports whether the agents list changed; its value is in
-	// Changes["agents"] when set.
-	AgentsDirty bool
 }
 
 func (m *configModel) startEditAgent() {
@@ -785,16 +790,16 @@ func (m configModel) renderKeys() string {
 
 // RunConfigEditor runs the interactive editor over the effective config. The
 // caller supplies the authoritative effective document (from
-// `nenya describe --json`) and a display path, so the editor never reads or
-// merges config files itself.
-func RunConfigEditor(effective []byte, displayPath string) (*EditorResult, bool, error) {
+// `nenya describe --json`), so the editor never reads or merges config files
+// itself.
+func RunConfigEditor(effective []byte) (*EditorResult, bool, error) {
 	cfg, err := jsonc.ParseDoc(effective)
 	if err != nil {
 		return nil, false, err
 	}
 
-	m := newConfigModel(cfg, effective, displayPath)
-	m.loadDefaults()
+	m := newConfigModel(cfg, effective)
+	m.resetCursor()
 	m.updateSectionsContent()
 
 	p := tea.NewProgram(&m, tea.WithAltScreen())
@@ -812,24 +817,22 @@ func RunConfigEditor(effective []byte, displayPath string) (*EditorResult, bool,
 		return nil, false, nil
 	}
 
-	resultData := &EditorResult{Changes: tm.changes}
-
+	changes := make(map[string]string, len(tm.changes)+1)
+	for k, v := range tm.changes {
+		changes[k] = v
+	}
 	if tm.agentsDirty {
-		value, err := AgentsValue(tm.agents)
+		value, err := agentsValue(tm.agents)
 		if err != nil {
 			return nil, false, err
 		}
-		if resultData.Changes == nil {
-			resultData.Changes = make(map[string]string)
-		}
-		resultData.Changes["agents"] = value
-		resultData.AgentsDirty = true
+		changes["agents"] = value
 	}
 
-	return resultData, true, nil
+	return &EditorResult{Changes: changes}, true, nil
 }
 
-func (m *configModel) loadDefaults() {
+func (m *configModel) resetCursor() {
 	m.cursor = 0
 	m.scrollSections()
 }
@@ -866,9 +869,9 @@ func parseLiteralValue(raw string) hujson.Literal {
 	return hujson.Literal(fmt.Sprintf("%q", raw))
 }
 
-// AgentsValue renders the agents list as the JSON value for the config's
+// agentsValue renders the agents list as the JSON value for the config's
 // top-level "agents" key, suitable for `nenya config set agents <json>`.
-func AgentsValue(agents []agentEntry) (string, error) {
+func agentsValue(agents []agentEntry) (string, error) {
 	agentsMap := make(map[string]any)
 	for _, a := range agents {
 		agentsMap[a.Name] = map[string]any{

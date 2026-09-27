@@ -20,7 +20,7 @@ func setupModel(t *testing.T, configJSON string) configModel {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := newConfigModel(cfg, []byte(configJSON), path)
+	m := newConfigModel(cfg, []byte(configJSON))
 	return m
 }
 

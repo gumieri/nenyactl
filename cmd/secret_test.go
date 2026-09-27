@@ -179,7 +179,7 @@ func TestRunSecretSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	secretSetDir = tmp
-	secretSetProvi = "openai"
+	secretSetProvider = "openai"
 
 	rr := &recordingRunner{out: []byte(filepath.Join(tmp, "secrets.json"))}
 	dir := fakeContract(t, rr)
@@ -196,11 +196,11 @@ func TestRunSecretSet(t *testing.T) {
 	}
 
 	t.Run("requires --provider", func(t *testing.T) {
-		secretSetProvi = ""
+		secretSetProvider = ""
 		if err := runSecretSet(testCmd(), []string{"sk-test"}); err == nil {
 			t.Fatal("expected error without --provider")
 		}
-		secretSetProvi = "openai"
+		secretSetProvider = "openai"
 	})
 
 	t.Run("requires exactly one argument", func(t *testing.T) {

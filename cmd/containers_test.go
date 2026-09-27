@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -168,7 +169,7 @@ func TestRunContainerSetup(t *testing.T) {
 		fakeContractWriting(t, filepath.Join(containerSetupCfg.dir, "secrets"))
 		containerSetupCfg.listenAddr = ":8080"
 		containerSetupCfg.start = false
-		if err := runContainerSetup(nil, nil); err != nil {
+		if err := runContainerSetup(testCmd(), nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -229,7 +230,7 @@ func TestRunContainerSetupWithExec(t *testing.T) {
 	t.Run("creates directory structure and files", func(t *testing.T) {
 		tmp := t.TempDir()
 		fakeContractWriting(t, filepath.Join(tmp, "secrets"))
-		err := runContainerSetupWithExec(nil, tmp, ":8080", false)
+		err := runContainerSetupWithExec(context.Background(), nil, tmp, ":8080", false)
 		if err != nil {
 			t.Fatalf("runContainerSetupWithExec() error = %v", err)
 		}
@@ -257,7 +258,7 @@ func TestRunContainerSetupWithExec(t *testing.T) {
 		}
 		tmp := t.TempDir()
 		fakeContractWriting(t, filepath.Join(tmp, "secrets"))
-		if err := runContainerSetupWithExec(ex, tmp, ":8080", true); err != nil {
+		if err := runContainerSetupWithExec(context.Background(), ex, tmp, ":8080", true); err != nil {
 			t.Fatalf("runContainerSetupWithExec() error = %v", err)
 		}
 		if !startCalled {
@@ -273,7 +274,7 @@ func TestRunContainerSetupWithExec(t *testing.T) {
 		if err := os.MkdirAll(filepath.Dir(invalidDir), 0o500); err != nil {
 			t.Fatal(err)
 		}
-		err := runContainerSetupWithExec(nil, invalidDir, ":8080", false)
+		err := runContainerSetupWithExec(context.Background(), nil, invalidDir, ":8080", false)
 		if err == nil {
 			t.Fatal("expected error for invalid dir, got nil")
 		}
@@ -282,7 +283,7 @@ func TestRunContainerSetupWithExec(t *testing.T) {
 	t.Run("returns error on empty dir and container dir error", func(t *testing.T) {
 		// Set XDG_DATA_HOME to non-existent path
 		t.Setenv("XDG_DATA_HOME", "/nonexistent")
-		err := runContainerSetupWithExec(nil, "", ":8080", false)
+		err := runContainerSetupWithExec(context.Background(), nil, "", ":8080", false)
 		if err == nil {
 			t.Fatal("expected error for missing container dir, got nil")
 		}

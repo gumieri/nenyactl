@@ -2,6 +2,7 @@ package integration
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,8 @@ import (
 	"testing"
 	"time"
 	"unicode"
+
+	"github.com/gumieri/nenyactl/internal/secrets"
 )
 
 // stripJSONComments removes // line comments from JSON, matching nenya's Config.StripComments.
@@ -39,13 +42,25 @@ func stripJSONComments(src []byte) []byte {
 
 const nenyactlBin = "bin/nenyactl"
 
-func buildNenyactl(t *testing.T) {
-	t.Helper()
-
+// TestMain always builds the CLI under test, so integration tests can never
+// exercise a stale bin/nenyactl left by an earlier build.
+func TestMain(m *testing.M) {
 	cmd := exec.Command("go", "build", "-o", nenyactlBin, "./cmd/nenyactl/")
 	cmd.Dir = filepath.Join("..", "..")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build nenyactl: %v\n%s", err, string(out))
+		fmt.Fprintf(os.Stderr, "build nenyactl: %v\n%s\n", err, string(out))
+		os.Exit(1)
+	}
+	os.Exit(m.Run())
+}
+
+// requireNenya skips a test when no nenya binary is installed. These tests
+// drive the real CLI, which now writes config and secrets through nenya's
+// contract commands; test/e2e covers the same path against a real release.
+func requireNenya(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("nenya"); err != nil {
+		t.Skip("nenya binary not installed; skipping contract-dependent integration test")
 	}
 }
 
@@ -57,12 +72,7 @@ func getBinPath() string {
 func runNenyactl(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
 
-	bin := getBinPath()
-	if _, err := os.Stat(bin); os.IsNotExist(err) {
-		buildNenyactl(t)
-	}
-
-	cmd := exec.Command(bin, args...)
+	cmd := exec.Command(getBinPath(), args...)
 	stdout := &strings.Builder{}
 	stderr := &strings.Builder{}
 	cmd.Stdout = stdout
@@ -98,6 +108,7 @@ func TestConfigInit(t *testing.T) {
 }
 
 func TestContainerSetup(t *testing.T) {
+	requireNenya(t)
 	tmp := t.TempDir()
 
 	out, stderr, err := runNenyactl(t, "containers", "setup", "--dir", tmp)
@@ -131,6 +142,7 @@ func TestContainerSetup(t *testing.T) {
 }
 
 func TestContainerSetupWithDefaults(t *testing.T) {
+	requireNenya(t)
 	tmp := t.TempDir()
 
 	_, stderr, err := runNenyactl(t, "containers", "setup", "--dir", tmp)
@@ -159,33 +171,12 @@ func TestContainerSetupWithDefaults(t *testing.T) {
 	}
 }
 
-func TestAgentsCommand(t *testing.T) {
-	tmp := t.TempDir()
-
-	// Manually create minimal setup to avoid permission issues
-	configDir := filepath.Join(tmp, "config")
-	secretsDir := filepath.Join(tmp, "secrets")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatalf("mkdir config: %v", err)
-	}
-	if err := os.MkdirAll(secretsDir, 0o700); err != nil {
-		t.Fatalf("mkdir secrets: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(`{"discovery":{"auto_agents":true}}`), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	_, _, err := runNenyactl(t, "agents")
-	if err != nil {
-		t.Logf("agents command failed (expected in non-interactive mode): %v", err)
-	}
-}
-
 // TestDirSemanticsConsistent asserts --dir has one meaning: a container layout
 // is written to the nested paths everywhere, and create commands accept a
 // directory that does not exist yet.
 func TestDirSemanticsConsistent(t *testing.T) {
 	t.Run("container layout writes nested paths", func(t *testing.T) {
+		requireNenya(t)
 		tmp := t.TempDir()
 		if err := os.MkdirAll(filepath.Join(tmp, "config"), 0o755); err != nil {
 			t.Fatal(err)
@@ -209,8 +200,8 @@ func TestDirSemanticsConsistent(t *testing.T) {
 		if _, stderr, err := runNenyactl(t, "secret", "bootstrap", "--dir", tmp); err != nil {
 			t.Fatalf("secret bootstrap --dir (container): %v\n%s", err, stderr)
 		}
-		if _, err := os.Stat(filepath.Join(tmp, "secrets", "01-client.json")); err != nil {
-			t.Errorf("expected secrets/01-client.json: %v", err)
+		if secrets.ExistingTokenFile(filepath.Join(tmp, "secrets")) == "" {
+			t.Errorf("expected a client token under secrets/")
 		}
 		if _, err := os.Stat(filepath.Join(tmp, "secrets.json")); err == nil {
 			t.Error("wrote a root-level secrets.json the container never reads")
@@ -218,6 +209,7 @@ func TestDirSemanticsConsistent(t *testing.T) {
 	})
 
 	t.Run("create commands accept a missing directory", func(t *testing.T) {
+		requireNenya(t)
 		base := t.TempDir()
 		for _, tc := range []struct {
 			args []string
@@ -236,60 +228,6 @@ func TestDirSemanticsConsistent(t *testing.T) {
 			}
 		}
 	})
-}
-
-func TestWriteAgentsConfig(t *testing.T) {
-	tmp := t.TempDir()
-
-	bin := getBinPath()
-	if _, err := os.Stat(bin); os.IsNotExist(err) {
-		buildNenyactl(t)
-	}
-
-	configD := filepath.Join(tmp, "config.d")
-	if err := os.MkdirAll(configD, 0o755); err != nil {
-		t.Fatalf("mkdir config.d: %v", err)
-	}
-
-	agentsCfg := map[string]any{
-		"agents": map[string]any{
-			"test-agent": map[string]any{
-				"strategy": "fallback",
-				"models":   []string{"gemini-2.5-flash"},
-			},
-		},
-		"discovery": map[string]any{
-			"auto_agents": false,
-		},
-	}
-
-	data, err := json.MarshalIndent(agentsCfg, "", "  ")
-	if err != nil {
-		t.Fatalf("marshal agents config: %v", err)
-	}
-
-	agentsPath := filepath.Join(configD, "20-agents.json")
-	if err := os.WriteFile(agentsPath, data, 0o644); err != nil {
-		t.Fatalf("write agents config: %v", err)
-	}
-
-	var readCfg map[string]any
-	readData, err := os.ReadFile(agentsPath)
-	if err != nil {
-		t.Fatalf("read agents config: %v", err)
-	}
-	if err := json.Unmarshal(readData, &readCfg); err != nil {
-		t.Fatalf("unmarshal agents config: %v", err)
-	}
-
-	if readCfg["discovery"] == nil {
-		t.Error("discovery section missing")
-	}
-	if disco, ok := readCfg["discovery"].(map[string]any); ok {
-		if disco["auto_agents"] != false {
-			t.Error("auto_agents should be false")
-		}
-	}
 }
 
 func TestVersionCommand(t *testing.T) {
@@ -322,20 +260,19 @@ func TestSecretBootstrap(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
+	requireNenya(t)
+
 	// Run bootstrap
-	bin := getBinPath()
-	cmd := exec.Command(bin, "secret", "bootstrap", "--dir", tmp)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Logf("secret bootstrap failed (may be permission issue): %v\n%s", err, string(out))
-		t.Skip("skipping due to permission issues")
+	if _, stderr, err := runNenyactl(t, "secret", "bootstrap", "--dir", tmp); err != nil {
+		t.Fatalf("secret bootstrap: %v\n%s", err, stderr)
 	}
 
-	clientTokenPath := filepath.Join(secretsDir, "01-client.json")
-	if _, err := os.Stat(clientTokenPath); os.IsNotExist(err) {
-		t.Skip("client token file not created, skipping")
+	tokenPath := secrets.ExistingTokenFile(secretsDir)
+	if tokenPath == "" {
+		t.Fatal("secret bootstrap did not create a client token")
 	}
 
-	data, err := os.ReadFile(clientTokenPath)
+	data, err := os.ReadFile(tokenPath)
 	if err != nil {
 		t.Fatalf("read client token: %v", err)
 	}

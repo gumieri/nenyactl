@@ -267,7 +267,10 @@ func normalizeTag(v string) string {
 // checkInstalledContract fails fast when the installed binary reports a
 // nenya contract_version outside the range this build supports (CONTRACT.md §2).
 // It feature-detects `describe --json`, then `version --json`; a binary that
-// exposes neither (older releases) is accepted.
+// exposes neither (older releases) is accepted. It deliberately does not use
+// internal/nenya's Client: install probes a freshly extracted binary by explicit
+// path through CommandRunner, and only ever needs one field, so a partial
+// decode cannot reject a binary just because another field drifted.
 func checkInstalledContract(ctx context.Context, runner CommandRunner, execPath string) error {
 	type versioned struct {
 		ContractVersion int `json:"contract_version"`

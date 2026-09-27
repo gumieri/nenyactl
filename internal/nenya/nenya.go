@@ -1,7 +1,7 @@
 // Package nenya is a typed client for the nenya consumer contract
 // (CONTRACT.md). Every fact about configuration, paths, secrets layout, release
-// artifacts, and the effective merged config comes from these commands — nenyactl
-// never reproduces nenya's loader, merge, or path resolution itself.
+// artifacts, and the effective merged config comes from these commands, so
+// nenyactl never reproduces nenya's loader, merge, or path resolution itself.
 package nenya
 
 import (
@@ -21,13 +21,28 @@ type Runner interface {
 	Output(ctx context.Context, args ...string) ([]byte, error)
 }
 
+// EnvRunner is a Runner that can carry extra environment entries. Binary
+// implements it, which is how SecretWriter targets a secrets directory.
+type EnvRunner interface {
+	Runner
+	// WithEnv returns a Runner whose environment is extended with env entries
+	// ("K=V"), leaving the receiver unchanged.
+	WithEnv(env ...string) Runner
+}
+
 // Binary is the Runner backed by an installed nenya binary.
 type Binary struct {
 	// Path is the nenya executable. Defaults to "nenya" on PATH.
 	Path string
 	// Env holds extra environment entries ("K=V") appended to the process
-	// environment. Used to target a secrets directory for `secret set`.
+	// environment. Empty means the process inherits its environment.
 	Env []string
+}
+
+// WithEnv returns a copy of the Binary with env appended.
+func (b Binary) WithEnv(env ...string) Runner {
+	b.Env = append(append([]string{}, b.Env...), env...)
+	return b
 }
 
 // Output runs `nenya <args>` and returns stdout.
@@ -44,20 +59,20 @@ func (b Binary) Output(ctx context.Context, args ...string) ([]byte, error) {
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			return out, fmt.Errorf("nenya %s: %w: %s", strings.Join(args, " "), err, msg)
-		}
-		return out, fmt.Errorf("nenya %s: %w", strings.Join(args, " "), err)
+		return out, commandError(args, err, stderr.String())
 	}
 	return out, nil
 }
 
-// probeTimeout bounds each contract call so a misbehaving binary cannot hang
-// nenyactl.
-const probeTimeout = 10 * time.Second
+// Call budgets. Reads get a short bound; writes get a longer one because a
+// mid-write timeout cannot be retried safely by nenyactl.
+const (
+	probeTimeout = 10 * time.Second
+	writeTimeout = 30 * time.Second
+)
 
-// Client is a contract client bound to a binary and a working directory of
-// context (config dir or file), so every call sees the same target.
+// Client is a contract client bound to a Runner and, optionally, to a config
+// dir or file, so every call sees the same target.
 type Client struct {
 	runner Runner
 	// configDir/configFile pin the target; either may be empty to use nenya's
@@ -97,37 +112,59 @@ func (c *Client) target() []string {
 	}
 }
 
+// output runs a read-only contract call under probeTimeout.
 func (c *Client) output(ctx context.Context, args ...string) ([]byte, error) {
+	return runBounded(ctx, c.runner, probeTimeout, args...)
+}
+
+// runBounded executes a contract call under a bounded context. A nil context is
+// normalized so a caller that bypasses cobra cannot panic the process.
+func runBounded(ctx context.Context, runner Runner, timeout time.Duration, args ...string) ([]byte, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return c.runner.Output(ctx, args...)
+	return runner.Output(ctx, args...)
+}
+
+// commandError builds a non-leaking error for a failed command. Secret commands
+// carry an API key or client token as an argument and may echo it on stderr, so
+// neither the argument values nor stderr are included.
+func commandError(args []string, err error, stderr string) error {
+	if isSecretCommand(args) {
+		return fmt.Errorf("nenya %s: %w", redactedArgs(args), err)
+	}
+	if msg := strings.TrimSpace(stderr); msg != "" {
+		return fmt.Errorf("nenya %s: %w: %s", redactedArgs(args), err, msg)
+	}
+	return fmt.Errorf("nenya %s: %w", redactedArgs(args), err)
+}
+
+// isSecretCommand reports whether args invokes `nenya secret ...`.
+func isSecretCommand(args []string) bool {
+	return len(args) > 0 && args[0] == "secret"
+}
+
+// redactedArgs renders an invocation for an error message, omitting the values
+// of secret commands.
+func redactedArgs(args []string) string {
+	if isSecretCommand(args) {
+		return "secret set …"
+	}
+	return strings.Join(args, " ")
 }
 
 // Paths mirrors `nenya paths --json` (CONTRACT.md §4.2, Appendix A.2).
 type Paths struct {
-	Mode       string  `json:"mode"`
-	ConfigDir  string  `json:"config_dir"`
-	ConfigFile string  `json:"config_file"`
-	ConfigD    string  `json:"config_d"`
-	SecretsDir string  `json:"secrets_dir"`
+	Mode       string `json:"mode"`
+	ConfigDir  string `json:"config_dir"`
+	ConfigFile string `json:"config_file"`
+	ConfigD    string `json:"config_d"`
+	SecretsDir string `json:"secrets_dir"`
+	// SocketPath is null unless a Unix-domain socket is configured.
 	SocketPath *string `json:"socket_path"`
 	Platform   string  `json:"platform"`
-}
-
-// Paths resolves the filesystem contract.
-func (c *Client) Paths(ctx context.Context) (Paths, error) {
-	out, err := c.output(ctx, append([]string{"paths", "--json"}, c.target()...)...)
-	if err != nil {
-		return Paths{}, fmt.Errorf("nenya paths --json: %w", err)
-	}
-	var p Paths
-	if err := json.Unmarshal(out, &p); err != nil {
-		return Paths{}, fmt.Errorf("parse paths --json: %w", err)
-	}
-	return p, nil
 }
 
 // SecretsSource reports which secrets source won and which were searched.
@@ -144,9 +181,26 @@ type Diagnostic struct {
 	Source  string `json:"source"`
 }
 
+// ProviderCatalogEntry is one row of the model catalog.
+type ProviderCatalogEntry struct {
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
+	ContextWindow int    `json:"context_window"`
+	MaxOutput     int    `json:"max_output"`
+}
+
+// Version mirrors `nenya version --json` (CONTRACT.md §4.1).
+type Version struct {
+	Version         string `json:"version"`
+	Commit          string `json:"commit"`
+	BuildTime       string `json:"build_time"`
+	ContractVersion int    `json:"contract_version"`
+}
+
 // Description mirrors `nenya describe --json` (CONTRACT.md §4.3). Config is the
 // authoritative effective document; nenyactl must render from it and never
-// recompute the merge.
+// recompute the merge. Paths/Secrets/Providers/Diagnostics mirror the contract
+// shape so the client can carry the whole document as the seam grows.
 type Description struct {
 	ContractVersion int             `json:"contract_version"`
 	Version         Version         `json:"version"`
@@ -154,13 +208,8 @@ type Description struct {
 	Secrets         SecretsSource   `json:"secrets"`
 	Config          json.RawMessage `json:"config"`
 	Providers       struct {
-		Configured []string `json:"configured"`
-		Catalog    []struct {
-			Provider      string `json:"provider"`
-			Model         string `json:"model"`
-			ContextWindow int    `json:"context_window"`
-			MaxOutput     int    `json:"max_output"`
-		} `json:"catalog"`
+		Configured []string               `json:"configured"`
+		Catalog    []ProviderCatalogEntry `json:"catalog"`
 	} `json:"providers"`
 	Diagnostics []Diagnostic `json:"diagnostics"`
 }
@@ -176,84 +225,29 @@ func (c *Client) Describe(ctx context.Context) (Description, error) {
 	if err := json.Unmarshal(out, &d); err != nil {
 		return Description{}, fmt.Errorf("parse describe --json: %w", err)
 	}
+	if string(d.Config) == "null" {
+		d.Config = nil
+	}
 	return d, nil
-}
-
-// Version mirrors `nenya version --json` (CONTRACT.md §4.1).
-type Version struct {
-	Version         string `json:"version"`
-	Commit          string `json:"commit"`
-	BuildTime       string `json:"build_time"`
-	ContractVersion int    `json:"contract_version"`
-}
-
-// Version returns the version surface.
-func (c *Client) Version(ctx context.Context) (Version, error) {
-	out, err := c.output(ctx, "version", "--json")
-	if err != nil {
-		return Version{}, fmt.Errorf("nenya version --json: %w", err)
-	}
-	var v Version
-	if err := json.Unmarshal(out, &v); err != nil {
-		return Version{}, fmt.Errorf("parse version --json: %w", err)
-	}
-	return v, nil
-}
-
-// ExampleConfig returns the canonical example config JSONC (CONTRACT.md §4.4).
-func (c *Client) ExampleConfig(ctx context.Context) ([]byte, error) {
-	out, err := c.output(ctx, "example-config")
-	if err != nil {
-		return nil, fmt.Errorf("nenya example-config: %w", err)
-	}
-	return out, nil
-}
-
-// ServiceUnitOptions selects the emitted service unit (CONTRACT.md §4.5).
-type ServiceUnitOptions struct {
-	Init        string
-	ExecPath    string
-	ConfigDir   string
-	SecretsFile string
-}
-
-// ServiceUnit returns the shipped unit with the supplied paths substituted.
-func (c *Client) ServiceUnit(ctx context.Context, opts ServiceUnitOptions) ([]byte, error) {
-	args := []string{"service-unit"}
-	if opts.Init != "" {
-		args = append(args, "--init", opts.Init)
-	}
-	if opts.ExecPath != "" {
-		args = append(args, "--exec-path", opts.ExecPath)
-	}
-	if opts.ConfigDir != "" {
-		args = append(args, "--config-dir", opts.ConfigDir)
-	}
-	if opts.SecretsFile != "" {
-		args = append(args, "--secrets-file", opts.SecretsFile)
-	}
-	out, err := c.output(ctx, args...)
-	if err != nil {
-		return nil, fmt.Errorf("nenya service-unit: %w", err)
-	}
-	return out, nil
 }
 
 // SetConfig sets a dotted config key through nenya's single writer. The value is
 // passed verbatim; nenya parses it as JSON when valid, else as a string. It
-// returns the path nenya wrote (printed by `config set`).
+// returns the target path nenya reports on stdout.
 func (c *Client) SetConfig(ctx context.Context, dottedKey, value string) (string, error) {
-	out, err := c.output(ctx, append([]string{"config", "set"}, append(c.target(), dottedKey, value)...)...)
+	args := append([]string{"config", "set"}, c.target()...)
+	args = append(args, dottedKey, value)
+	out, err := runBounded(ctx, c.runner, writeTimeout, args...)
 	if err != nil {
 		return "", fmt.Errorf("nenya config set %s: %w", dottedKey, err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
 
-// SecretWriter is a Client whose secret commands target a specific secrets
-// directory via NENYA_SECRETS_DIR. nenya's `secret set` resolves the file
-// itself (and fails closed on systemd credentials), so nenyactl only supplies
-// the directory the deployment uses.
+// SecretWriter writes secrets through nenya's single writer, targeting a
+// specific secrets directory via NENYA_SECRETS_DIR (CONTRACT.md §3.3). nenya's
+// `secret set` resolves the file itself (and fails closed on systemd
+// credentials), so nenyactl only supplies the directory the deployment uses.
 type SecretWriter struct {
 	runner Runner
 	dir    string
@@ -261,7 +255,11 @@ type SecretWriter struct {
 
 // SecretWriterFor returns a SecretWriter targeting dir.
 func (c *Client) SecretWriterFor(dir string) SecretWriter {
-	return SecretWriter{runner: secretsEnvRunner{base: c.runner, dir: dir}, dir: dir}
+	runner := c.runner
+	if er, ok := runner.(EnvRunner); ok {
+		runner = er.WithEnv("NENYA_SECRETS_DIR=" + dir)
+	}
+	return SecretWriter{runner: runner, dir: dir}
 }
 
 // Dir returns the secrets directory the writer targets.
@@ -282,28 +280,9 @@ func (w SecretWriter) SetProviderKey(ctx context.Context, provider, apiKey strin
 }
 
 func (w SecretWriter) output(ctx context.Context, args ...string) (string, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	out, err := w.runner.Output(ctx, args...)
+	out, err := runBounded(ctx, w.runner, writeTimeout, args...)
 	if err != nil {
-		return "", fmt.Errorf("nenya %s: %w", strings.Join(args, " "), err)
+		return "", commandError(args, err, "")
 	}
 	return strings.TrimSpace(string(out)), nil
-}
-
-// secretsEnvRunner injects NENYA_SECRETS_DIR into command invocations.
-type secretsEnvRunner struct {
-	base Runner
-	dir  string
-}
-
-func (r secretsEnvRunner) Output(ctx context.Context, args ...string) ([]byte, error) {
-	if b, ok := r.base.(Binary); ok {
-		b.Env = append(append([]string{}, b.Env...), "NENYA_SECRETS_DIR="+r.dir)
-		return b.Output(ctx, args...)
-	}
-	return r.base.Output(ctx, args...)
 }

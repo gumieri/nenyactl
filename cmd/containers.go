@@ -13,6 +13,7 @@ import (
 
 	"github.com/gumieri/nenyactl/internal/containers"
 	ctpaths "github.com/gumieri/nenyactl/internal/paths"
+	"github.com/gumieri/nenyactl/internal/secrets"
 	"github.com/spf13/cobra"
 )
 
@@ -110,10 +111,10 @@ func containerDefaultDir() string {
 }
 
 func runContainerSetup(cmd *cobra.Command, args []string) error {
-	return runContainerSetupWithExec(defaultExec, containerSetupCfg.dir, containerSetupCfg.listenAddr, containerSetupCfg.start)
+	return runContainerSetupWithExec(cmd.Context(), defaultExec, containerSetupCfg.dir, containerSetupCfg.listenAddr, containerSetupCfg.start)
 }
 
-func runContainerSetupWithExec(ex execer, dir, listenAddr string, startAfter bool) error {
+func runContainerSetupWithExec(ctx context.Context, ex execer, dir, listenAddr string, startAfter bool) error {
 	res, err := resolveDir(dir, dirCreate, true)
 	if err != nil {
 		return err
@@ -130,17 +131,16 @@ func runContainerSetupWithExec(ex execer, dir, listenAddr string, startAfter boo
 	}
 	fmt.Println(successStyle.Render("✓"), "Created config and compose.yml")
 
-	// Secrets are written through nenya's single writer against the host
-	// directory the compose mounts at /run/secrets/nenya, so the file and the
-	// container agree on the layout.
+	// Secrets are written through nenya's single writer. `secret set` resolves
+	// the file inside the directory reported by NENYA_SECRETS_DIR, which is the
+	// host directory the compose mounts at /run/secrets/nenya.
 	secretsDir := filepath.Join(dir, "secrets")
-	client := contractForDir(filepath.Join(dir, "config"))
-	writer := client.SecretWriterFor(secretsDir)
+	writer := res.Contract().SecretWriterFor(secretsDir)
 
-	if existingTokenInDir(secretsDir) != "" {
+	if secrets.ExistingTokenFile(secretsDir) != "" {
 		fmt.Println(dimStyle.Render("  ∃"), "Kept existing client token")
 	} else {
-		if _, err := writer.SetClientToken(context.Background(), ""); err != nil {
+		if _, err := writer.SetClientToken(ctx, ""); err != nil {
 			return fmt.Errorf("generate client token: %w", err)
 		}
 		fmt.Println(successStyle.Render("✓"), "Generated client token")
@@ -151,8 +151,8 @@ func runContainerSetupWithExec(ex execer, dir, listenAddr string, startAfter boo
 		fmt.Println(dimStyle.Render("  TUI skipped or cancelled"))
 		keys = nil
 	}
-	for _, provider := range sortedKeys(keys) {
-		if _, err := writer.SetProviderKey(context.Background(), provider, keys[provider]); err != nil {
+	for _, provider := range sortedStringKeys(keys) {
+		if _, err := writer.SetProviderKey(ctx, provider, keys[provider]); err != nil {
 			return fmt.Errorf("set provider key %s: %w", provider, err)
 		}
 	}
@@ -298,8 +298,8 @@ func runContainerStatusWithExec(ex execer, dir string) error {
 	return nil
 }
 
-// sortedKeys returns the provider names in deterministic order.
-func sortedKeys(m map[string]string) []string {
+// sortedStringKeys returns the provider names in deterministic order.
+func sortedStringKeys(m map[string]string) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)

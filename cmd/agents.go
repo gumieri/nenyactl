@@ -50,18 +50,18 @@ func runAgents(cmd *cobra.Command, args []string) error {
 			if modeErr != nil {
 				return modeErr
 			}
-			info, err := detect.DetectFromDir(agentsDir, mode)
-			if err != nil {
-				return err
+			info, detectErr := detect.DetectFromDir(agentsDir, mode)
+			if detectErr != nil {
+				return detectErr
 			}
-			res.Info = info
+			res = detectedResolution(info)
 		}
 	} else {
 		info, err := detect.Detect()
 		if err != nil {
 			return err
 		}
-		res = dirResolution{Path: info.ConfigFile, Info: info}
+		res = detectedResolution(info)
 	}
 
 	client := res.Contract()
@@ -84,7 +84,11 @@ func runAgents(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	agentsJSON, err := json.Marshal(cfg["agents"])
+	agentsCfg, ok := cfg["agents"]
+	if !ok || agentsCfg == nil {
+		return fmt.Errorf("no agents configured to save")
+	}
+	agentsJSON, err := json.Marshal(agentsCfg)
 	if err != nil {
 		return fmt.Errorf("encode agents: %w", err)
 	}

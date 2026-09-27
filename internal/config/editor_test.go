@@ -48,37 +48,34 @@ func TestParseLiteralValue(t *testing.T) {
 }
 
 func TestNewConfigModel(t *testing.T) {
-	cfg, err := jsonc.ReadFile(filepath.Join("testdata", "config.json"))
+	cfg, err := jsonc.ParseDoc([]byte(testConfig))
 	if err != nil {
-		if os.IsNotExist(err) {
-			t.Skip("no testdata/config.json")
-		}
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg, cfg.Pack(), "/tmp/config.json")
+	m := newConfigModel(cfg, []byte(testConfig))
 	if len(m.sections) == 0 {
 		t.Error("expected non-empty sections")
+	}
+	if !m.sections[len(m.sections)-1].isAgent {
+		t.Error("expected the final section to be the agents section")
 	}
 }
 
 func TestLoadSection(t *testing.T) {
-	cfg, err := jsonc.ReadFile(filepath.Join("testdata", "config.json"))
+	cfg, err := jsonc.ParseDoc([]byte(testConfig))
 	if err != nil {
-		if os.IsNotExist(err) {
-			t.Skip("no testdata/config.json")
-		}
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg, cfg.Pack(), "/tmp/config.json")
+	m := newConfigModel(cfg, []byte(testConfig))
 	if len(m.sections) == 0 {
 		t.Fatal("no sections")
 	}
 
-	m.loadSection(m.sections[0].name)
+	m.loadSection("server")
 	if len(m.entries) == 0 {
-		t.Error("expected non-empty entries for first section")
+		t.Error("expected non-empty entries for the server section")
 	}
 }
 
@@ -94,7 +91,7 @@ func TestApplyEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg, []byte(testConfig), path)
+	m := newConfigModel(cfg, []byte(testConfig))
 	m.loadSection("governance")
 	if len(m.entries) == 0 {
 		t.Fatal("expected entries")
@@ -126,7 +123,7 @@ func TestApplyEditPreservesComments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg, []byte(testConfig), path)
+	m := newConfigModel(cfg, []byte(testConfig))
 	m.loadSection("governance")
 	m.cursor = 0
 	m.editInput.SetValue("500000")
@@ -146,11 +143,8 @@ func TestApplyEditPreservesComments(t *testing.T) {
 }
 
 func TestIsSectionObject(t *testing.T) {
-	v, err := jsonc.ReadFile(filepath.Join("testdata", "config.json"))
+	v, err := jsonc.ParseDoc([]byte(testConfig))
 	if err != nil {
-		if os.IsNotExist(err) {
-			t.Skip("no testdata/config.json")
-		}
 		t.Fatal(err)
 	}
 
@@ -201,4 +195,41 @@ func TestAgentsFromEffectiveAutoFlag(t *testing.T) {
 	if len(agents) != 0 {
 		t.Errorf("expected no agents, got %v", agents)
 	}
+}
+
+func TestAgentsFromEffectiveEdgeCases(t *testing.T) {
+	t.Run("invalid JSON", func(t *testing.T) {
+		agents, auto := agentsFromEffective([]byte(`not json`))
+		if agents != nil || auto {
+			t.Errorf("got (%v, %v), want (nil, false)", agents, auto)
+		}
+	})
+
+	t.Run("null document", func(t *testing.T) {
+		agents, auto := agentsFromEffective([]byte(`null`))
+		if agents != nil || auto {
+			t.Errorf("got (%v, %v), want (nil, false)", agents, auto)
+		}
+	})
+
+	t.Run("discovery without auto_agents", func(t *testing.T) {
+		_, auto := agentsFromEffective([]byte(`{"discovery":{"enabled":true}}`))
+		if auto {
+			t.Error("auto_agents should default to false when absent")
+		}
+	})
+
+	t.Run("models null", func(t *testing.T) {
+		agents, _ := agentsFromEffective([]byte(`{"agents":{"a":{"strategy":"fallback","models":null}}}`))
+		if len(agents) != 1 || len(agents[0].Models) != 0 {
+			t.Errorf("agents = %+v", agents)
+		}
+	})
+
+	t.Run("agents not an object", func(t *testing.T) {
+		agents, _ := agentsFromEffective([]byte(`{"agents":[]}`))
+		if agents != nil {
+			t.Errorf("agents = %v, want nil", agents)
+		}
+	})
 }

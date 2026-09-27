@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/gumieri/nenyactl/internal/config"
 	"github.com/gumieri/nenyactl/internal/detect"
@@ -106,14 +107,14 @@ func runConfigEdit(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		res = dirResolution{Path: info.ConfigFile, Info: info}
+		res = detectedResolution(info)
 	}
 
 	client := res.Contract()
 
 	desc, err := client.Describe(cmd.Context())
 	if err != nil {
-		return fmt.Errorf("read effective config (is nenya installed?): %w", err)
+		return fmt.Errorf("config edit requires a nenya release that ships the `describe --json` contract command: %w", err)
 	}
 	if len(desc.Config) == 0 {
 		return fmt.Errorf("nenya describe returned no config for %s", res.ConfigDir())
@@ -121,7 +122,7 @@ func runConfigEdit(cmd *cobra.Command, args []string) error {
 
 	fmt.Println(infoStyle.Render("›"), "Editing:", res.ConfigDir())
 
-	result, changed, err := config.RunConfigEditor(desc.Config, res.Info.ConfigFile)
+	result, changed, err := config.RunConfigEditor(desc.Config)
 	if err != nil {
 		return fmt.Errorf("editor: %w", err)
 	}
@@ -133,18 +134,25 @@ func runConfigEdit(cmd *cobra.Command, args []string) error {
 
 	// Apply every change through nenya's single writer. nenya chooses the
 	// target file (managed drop-in or config file), merges, and writes
-	// atomically, so nenyactl never reproduces the loader or the merge.
+	// atomically, so nenyactl never reproduces the loader or the merge. Each
+	// key is one call, so a mid-way failure is reported with what already
+	// landed rather than pretending the edit was atomic.
 	keys := make([]string, 0, len(result.Changes))
 	for k := range result.Changes {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
+	var applied []string
 	for _, key := range keys {
 		path, err := client.SetConfig(cmd.Context(), key, result.Changes[key])
 		if err != nil {
+			if len(applied) > 0 {
+				return fmt.Errorf("apply %s: %w (already applied: %s)", key, err, strings.Join(applied, ", "))
+			}
 			return fmt.Errorf("apply %s: %w", key, err)
 		}
+		applied = append(applied, key)
 		fmt.Println(successStyle.Render("✓"), key, "→", path)
 	}
 

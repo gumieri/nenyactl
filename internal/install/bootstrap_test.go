@@ -281,9 +281,28 @@ func TestProbeOutputIsBounded(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a timeout error")
 	}
-	if elapsed := time.Since(start); elapsed > probeTimeout+2*time.Second {
+	elapsed := time.Since(start)
+	if elapsed < probeTimeout {
+		t.Errorf("probe returned in %s, want it bounded at %s", elapsed, probeTimeout)
+	}
+	if elapsed > probeTimeout+2*time.Second {
 		t.Fatalf("probe took %s, want bounded near %s", elapsed, probeTimeout)
 	}
+}
+
+func TestBootstrapConfigContentFallback(t *testing.T) {
+	t.Run("uses example-config when available", func(t *testing.T) {
+		r := scriptRunner{outputs: map[string]string{"/bin/nenya example-config": `{"from":"nenya"}`}}
+		if got := BootstrapConfigContent(context.Background(), r, "/bin/nenya"); string(got) != `{"from":"nenya"}` {
+			t.Errorf("got %q", got)
+		}
+	})
+
+	t.Run("falls back to the minimal shim", func(t *testing.T) {
+		if got := BootstrapConfigContent(context.Background(), scriptRunner{}, "/bin/nenya"); string(got) != minimalConfig {
+			t.Errorf("got %q, want the minimal shim", got)
+		}
+	})
 }
 
 func TestQueryNenyaPathsTimesOut(t *testing.T) {

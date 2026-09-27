@@ -1,10 +1,7 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	secrets "github.com/gumieri/nenyactl/internal/secrets"
 	"github.com/spf13/cobra"
@@ -70,7 +67,8 @@ var secretBootstrapCmd = &cobra.Command{
 (nenya secret set), which chooses the secrets file, writes atomically, and
 fails closed when a systemd credential source is active.
 
-Existing tokens are overwritten only with --force.`,
+Existing tokens are overwritten only with --force; --force cannot override a
+systemd credential source, because nenya fails closed in that case.`,
 	RunE: runSecretBootstrap,
 }
 
@@ -96,7 +94,7 @@ func runSecretBootstrap(cmd *cobra.Command, args []string) error {
 	}
 
 	if !bootstrapForce {
-		if existing := existingTokenInDir(secretsDir); existing != "" {
+		if existing := secrets.ExistingTokenFile(secretsDir); existing != "" {
 			return fmt.Errorf("client token already exists in %s; use --force to replace it", existing)
 		}
 	}
@@ -115,8 +113,9 @@ func runSecretBootstrap(cmd *cobra.Command, args []string) error {
 
 // secretSetCmd sets a provider key through nenya's single writer.
 var secretSetCmd = &cobra.Command{
-	Use:   "set --provider <name> <api-key>",
+	Use:   "set <api-key>",
 	Short: "Set a provider API key",
+	Args:  cobra.ExactArgs(1),
 	Long: `Set a provider API key through nenya's single writer (nenya secret set),
 which chooses the secrets file, writes atomically, and fails closed when a
 systemd credential source is active.`,
@@ -124,18 +123,18 @@ systemd credential source is active.`,
 }
 
 var (
-	secretSetDir   string
-	secretSetProvi string
+	secretSetDir      string
+	secretSetProvider string
 )
 
 func init() {
 	secretCmd.AddCommand(secretSetCmd)
 	secretSetCmd.Flags().StringVar(&secretSetDir, "dir", "", "Config root or container directory (default: system config root)")
-	secretSetCmd.Flags().StringVar(&secretSetProvi, "provider", "", "Provider name whose key is set (required)")
+	secretSetCmd.Flags().StringVar(&secretSetProvider, "provider", "", "Provider name whose key is set (required)")
 }
 
 func runSecretSet(cmd *cobra.Command, args []string) error {
-	if secretSetProvi == "" {
+	if secretSetProvider == "" {
 		return fmt.Errorf("--provider is required")
 	}
 	if len(args) != 1 {
@@ -152,52 +151,11 @@ func runSecretSet(cmd *cobra.Command, args []string) error {
 	}
 
 	writer := res.Contract().SecretWriterFor(secretsDir)
-	path, err := writer.SetProviderKey(cmd.Context(), secretSetProvi, args[0])
+	path, err := writer.SetProviderKey(cmd.Context(), secretSetProvider, args[0])
 	if err != nil {
 		return fmt.Errorf("secret set: %w", err)
 	}
 
-	fmt.Println(successStyle.Render("✓"), "Provider key", secretSetProvi, "→", path)
+	fmt.Println(successStyle.Render("✓"), "Provider key", secretSetProvider, "→", path)
 	return nil
-}
-
-// existingTokenInDir reports the path of a token file already present in dir,
-// or "" when none exists.
-func existingTokenInDir(dir string) string {
-	if dir == "" {
-		return ""
-	}
-	if data, err := os.ReadFile(filepath.Join(dir, "secrets.json")); err == nil && hasClientToken(data) {
-		return filepath.Join(dir, "secrets.json")
-	}
-	if data, err := os.ReadFile(filepath.Join(dir, "secrets")); err == nil && hasClientToken(data) {
-		return filepath.Join(dir, "secrets")
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return ""
-	}
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil {
-			continue
-		}
-		if hasClientToken(data) {
-			return filepath.Join(dir, e.Name())
-		}
-	}
-	return ""
-}
-
-func hasClientToken(data []byte) bool {
-	var s struct {
-		ClientToken string `json:"client_token"`
-	}
-	if err := json.Unmarshal(data, &s); err != nil {
-		return false
-	}
-	return s.ClientToken != ""
 }

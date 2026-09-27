@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gumieri/nenyactl/internal/nenya"
 	"github.com/gumieri/nenyactl/internal/secrets"
 )
 
@@ -103,17 +104,6 @@ func resolveInstallPaths(ctx context.Context, cfg Config, runner CommandRunner, 
 	}, nil
 }
 
-// nenyaPaths mirrors the `nenya paths --json` shape (CONTRACT.md §4.2).
-type nenyaPaths struct {
-	Mode       string  `json:"mode"`
-	ConfigDir  string  `json:"config_dir"`
-	ConfigFile string  `json:"config_file"`
-	ConfigD    string  `json:"config_d"`
-	SecretsDir string  `json:"secrets_dir"`
-	SocketPath *string `json:"socket_path"`
-	Platform   string  `json:"platform"`
-}
-
 // probeTimeout bounds feature-detection probes. A released nenya that ignores
 // unknown subcommands would otherwise fall through to server startup and block
 // forever, so every probe is time-bounded and a timeout is treated as "absent".
@@ -127,15 +117,16 @@ func probeOutput(ctx context.Context, runner CommandRunner, name string, args ..
 }
 
 // queryNenyaPaths feature-detects `nenya paths --json`. ok is false when the
-// command does not exist or does not produce parseable output.
-func queryNenyaPaths(ctx context.Context, runner CommandRunner, execPath string) (nenyaPaths, bool) {
+// command does not exist or does not produce parseable output. The shape is
+// shared with the contract client so the two cannot drift.
+func queryNenyaPaths(ctx context.Context, runner CommandRunner, execPath string) (nenya.Paths, bool) {
 	out, err := probeOutput(ctx, runner, execPath, "paths", "--json")
 	if err != nil || len(out) == 0 {
-		return nenyaPaths{}, false
+		return nenya.Paths{}, false
 	}
-	var p nenyaPaths
+	var p nenya.Paths
 	if err := json.Unmarshal(out, &p); err != nil {
-		return nenyaPaths{}, false
+		return nenya.Paths{}, false
 	}
 	return p, true
 }
@@ -178,9 +169,9 @@ func bootstrapSecrets(p installPaths) (bool, error) {
 		return false, fmt.Errorf("stat %s: %w", p.secretsFile, err)
 	}
 
-	if found := existingTokenInDir(p.secretsDir); found != "" {
-		fmt.Fprintf(os.Stderr, "Warning: a client token already exists in %s; not creating %s.\n", p.secretsDir, p.secretsFile)
-		fmt.Fprintln(os.Stderr, "Nenya would prefer the systemd-credential path, so set NENYA_SECRETS_DIR if you intend to use that copy.")
+	if found := secrets.ExistingTokenFile(p.secretsDir); found != "" {
+		fmt.Fprintf(os.Stderr, "Warning: a client token already exists in %s; not creating %s.\n", found, p.secretsFile)
+		fmt.Fprintln(os.Stderr, "Delete it (or set NENYA_SECRETS_DIR) before creating a new one from the install.")
 		return false, nil
 	}
 
@@ -196,46 +187,6 @@ func bootstrapSecrets(p installPaths) (bool, error) {
 	}
 	content = append(content, '\n')
 	return writeNewFile(p.secretsFile, content, 0o600)
-}
-
-// existingTokenInDir reports the path of a token file already present in dir
-// (a wildcard secrets directory), or "" when none exists.
-func existingTokenInDir(dir string) string {
-	if dir == "" {
-		return ""
-	}
-	if data, err := os.ReadFile(filepath.Join(dir, "secrets")); err == nil {
-		if hasClientToken(data) {
-			return filepath.Join(dir, "secrets")
-		}
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return ""
-	}
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil {
-			continue
-		}
-		if hasClientToken(data) {
-			return filepath.Join(dir, e.Name())
-		}
-	}
-	return ""
-}
-
-func hasClientToken(data []byte) bool {
-	var s struct {
-		ClientToken string `json:"client_token"`
-	}
-	if err := json.Unmarshal(data, &s); err != nil {
-		return false
-	}
-	return s.ClientToken != ""
 }
 
 // writeNewFile writes content to path only if it does not already exist, using
