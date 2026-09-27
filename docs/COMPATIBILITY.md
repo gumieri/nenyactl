@@ -8,11 +8,13 @@ contract, never nenya's Go packages.
 ## The `contract_version` we support
 
 `nenyactl` declares its supported range in `internal/contract`, and every
-install path enforces it. Immediately after writing the binary, nenyactl runs
-the installed `nenya version --json` (stable) and falls back to
-`describe --json` (target) to read `contract_version`, then calls
-`contract.Check(v)`. An out-of-range installation fails fast with a message
-naming the installed and supported versions, instead of misbehaving silently:
+install path enforces it. Immediately after writing the binary, nenyactl probes
+the installed `nenya describe --json` (target) and falls back to
+`version --json` (stable) to read `contract_version`, then calls
+`contract.Check(v)`. The runtime contract client (`internal/nenya`) checks
+`contract_version` on every `describe` as well. An out-of-range installation
+fails fast with a message naming the installed and supported versions, instead
+of misbehaving silently:
 
 ```text
 installed nenya /usr/bin/nenya: nenya contract_version 2 is not supported by this nenyactl build (supports 1..1); update nenyactl or install a compatible nenya
@@ -41,10 +43,10 @@ checks the exit status; until it ships, nenyactl uses a documented fallback:
 |---------|--------|-------------------------|
 | `version --json` | stable | — |
 | `paths --json` | target | platform defaults (`/etc/nenya`, `~/.local/share/nenyactl/nenya`) |
-| `describe --json` | target | contract check falls back to `version --json`; config edits use the single file the detected layout uses |
+| `describe --json` | target | contract check falls back to `version --json`; `config edit` requires `describe` and fails with an actionable error otherwise |
 | `example-config` | target | a minimal, documented bootstrap config |
 | `service-unit` | target | the unit shipped in the release archive (`deploy/`) |
-| `config set` / `secret set` | target | direct edits to the file the layout uses |
+| `config set` / `secret set` | target | none — nenyactl no longer edits config or secrets files directly; the command fails until the contract ships |
 
 Fallbacks are marked in code and are removed as the contract commands ship.
 

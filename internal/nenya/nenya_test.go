@@ -100,6 +100,26 @@ func TestDescribeRejectsUnsupportedContract(t *testing.T) {
 	}
 }
 
+func TestCommandErrorScrubsValues(t *testing.T) {
+	cfgErr := commandError(
+		[]string{"config", "set", "--config-dir", "/etc/nenya", "providers.openai.key", "sk-secret"},
+		errors.New("boom"),
+		"invalid value sk-secret",
+	)
+	if strings.Contains(cfgErr.Error(), "sk-secret") {
+		t.Errorf("config set value leaked: %v", cfgErr)
+	}
+
+	secErr := commandError(
+		[]string{"secret", "set", "--provider", "openai", "sk-secret"},
+		errors.New("boom"),
+		"echoed sk-secret",
+	)
+	if strings.Contains(secErr.Error(), "sk-secret") {
+		t.Errorf("secret value leaked: %v", secErr)
+	}
+}
+
 func TestRunBoundedSurfacesCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

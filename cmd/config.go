@@ -118,7 +118,7 @@ func runConfigEdit(cmd *cobra.Command, args []string) error {
 
 	desc, err := client.Describe(cmd.Context())
 	if err != nil {
-		return fmt.Errorf("config edit requires a nenya release that ships the `describe --json` contract command: %w", err)
+		return fmt.Errorf("read effective config via `nenya describe --json`: %w", err)
 	}
 	if len(desc.Config) == 0 {
 		return fmt.Errorf("nenya describe returned no config for %s", res.ConfigDir())

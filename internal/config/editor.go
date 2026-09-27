@@ -59,11 +59,12 @@ type configModel struct {
 	changes map[string]string
 
 	// agents section state
-	agents         []agentEntry
-	agentsModeAuto bool
-	agentsDirty    bool
-	agentCursor    int
-	editName       textinput.Model
+	agents             []agentEntry
+	agentsModeAuto     bool
+	autoAgentsOriginal bool
+	agentsDirty        bool
+	agentCursor        int
+	editName           textinput.Model
 
 	sectionsView  viewport.Model
 	keysView      viewport.Model
@@ -117,6 +118,7 @@ func newConfigModel(cfg *hujson.Value, effective []byte) configModel {
 	// Agents come from the effective document (nenya describe), never from a
 	// drop-in path: the editor must not read or merge config files itself.
 	m.agents, m.agentsModeAuto = agentsFromEffective(effective)
+	m.autoAgentsOriginal = m.agentsModeAuto
 
 	return m
 }
@@ -576,7 +578,6 @@ func (m configModel) viewEdit() string {
 	if m.editKey != "agent_name" && m.cursor >= 0 && m.cursor < len(m.entries) {
 		currentVal = theme.Dimmed.Render("Current: " + jsonc.FieldValueString(m.entries[m.cursor].Value))
 	}
-
 	body := lipgloss.JoinVertical(lipgloss.Top, title, "", currentVal, "", inputView, "", theme.Dimmed.Render("Enter to save · Esc to cancel"))
 
 	baseStyle := lipgloss.NewStyle().
@@ -817,19 +818,31 @@ func RunConfigEditor(effective []byte) (*EditorResult, bool, error) {
 		return nil, false, nil
 	}
 
-	changes := make(map[string]string, len(tm.changes)+1)
-	for k, v := range tm.changes {
+	res, err := tm.result()
+	if err != nil {
+		return nil, false, err
+	}
+	return res, true, nil
+}
+
+// result assembles the changes the user made. It is separate from the TUI run
+// loop so the assembly (not just the interactive path) is unit-testable.
+func (m *configModel) result() (*EditorResult, error) {
+	changes := make(map[string]string, len(m.changes)+1)
+	for k, v := range m.changes {
 		changes[k] = v
 	}
-	if tm.agentsDirty {
-		value, err := agentsValue(tm.agents)
+	if m.agentsDirty {
+		value, err := agentsValue(m.agents)
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
 		changes["agents"] = value
 	}
-
-	return &EditorResult{Changes: changes}, true, nil
+	if m.agentsModeAuto != m.autoAgentsOriginal {
+		changes["discovery.auto_agents"] = strconv.FormatBool(m.agentsModeAuto)
+	}
+	return &EditorResult{Changes: changes}, nil
 }
 
 func (m *configModel) resetCursor() {

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -133,6 +134,45 @@ func TestApplyEditPreservesComments(t *testing.T) {
 	}
 	if !strings.Contains(packed, "// Server") {
 		t.Errorf("comments were not preserved:\n%s", packed)
+	}
+}
+
+func TestAgentsModeToggleRecorded(t *testing.T) {
+	cfg, err := jsonc.ParseDoc([]byte(testConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := newConfigModel(cfg, []byte(testConfig))
+	m.agentsModeAuto = !m.agentsModeAuto
+	m.agentsDirty = false
+
+	result, err := m.result()
+	if err != nil || result == nil {
+		t.Fatalf("result: %v", err)
+	}
+	want := strconv.FormatBool(m.agentsModeAuto)
+	if got := result.Changes["discovery.auto_agents"]; got != want {
+		t.Errorf("auto_agents change = %q, want %q", got, want)
+	}
+}
+
+func TestResultIncludesDirtyAgents(t *testing.T) {
+	cfg, err := jsonc.ParseDoc([]byte(testConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := newConfigModel(cfg, []byte(testConfig))
+	m.agents = []agentEntry{{Name: "build", Strategy: "fallback", Models: []string{"m"}}}
+	m.agentsDirty = true
+
+	result, err := m.result()
+	if err != nil || result == nil {
+		t.Fatalf("result: %v", err)
+	}
+	if result.Changes["agents"] == "" {
+		t.Error("expected an agents change")
 	}
 }
 

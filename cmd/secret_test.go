@@ -13,18 +13,28 @@ import (
 
 // recordingRunner is a nenya.Runner that records every invocation and emulates
 // the contract. It lets the secret commands be tested without a nenya binary.
+// Its state is shared across WithEnv copies (the env the writer applied is what
+// the test asserts); Binary's own copy semantics are covered separately.
 type recordingRunner struct {
+	rec *record
+	out []byte
+	err error
+}
+
+type record struct {
 	calls  [][]string
 	env    []string
-	out    []byte
-	err    error
 	onCall func(args []string)
 }
 
+func newRecordingRunner() *recordingRunner {
+	return &recordingRunner{rec: &record{}}
+}
+
 func (r *recordingRunner) Output(_ context.Context, args ...string) ([]byte, error) {
-	r.calls = append(r.calls, append([]string(nil), args...))
-	if r.onCall != nil {
-		r.onCall(args)
+	r.rec.calls = append(r.rec.calls, append([]string(nil), args...))
+	if r.rec.onCall != nil {
+		r.rec.onCall(args)
 	}
 	if r.err != nil {
 		return nil, r.err
@@ -35,8 +45,9 @@ func (r *recordingRunner) Output(_ context.Context, args ...string) ([]byte, err
 // WithEnv makes recordingRunner an EnvRunner so SecretWriterFor's
 // NENYA_SECRETS_DIR targeting can be asserted.
 func (r *recordingRunner) WithEnv(env ...string) nenya.Runner {
-	r.env = append(r.env, env...)
-	return r
+	cp := *r
+	r.rec.env = append(r.rec.env, env...)
+	return &cp
 }
 
 // fakeContract points newContractClient at rr for the test and returns a pointer
@@ -66,12 +77,13 @@ func testCmd() *cobra.Command {
 // emulating nenya's writer so container setup can be tested without a binary.
 func fakeContractWriting(t *testing.T, secretsDir string) *recordingRunner {
 	t.Helper()
-	rr := &recordingRunner{onCall: func(args []string) {
+	rr := newRecordingRunner()
+	rr.rec.onCall = func(args []string) {
 		if len(args) >= 3 && args[0] == "secret" && args[1] == "set" && args[2] == "--client-token" {
 			_ = os.MkdirAll(secretsDir, 0o700)
 			_ = os.WriteFile(filepath.Join(secretsDir, "01-client.json"), []byte(`{"client_token":"nk-fake"}`), 0o600)
 		}
-	}}
+	}
 	fakeContract(t, rr)
 	return rr
 }
@@ -121,7 +133,8 @@ func TestRunSecretBootstrap(t *testing.T) {
 		bootstrapDir = tmp
 		bootstrapForce = false
 
-		rr := &recordingRunner{out: []byte(filepath.Join(tmp, "secrets.json"))}
+		rr := newRecordingRunner()
+		rr.out = []byte(filepath.Join(tmp, "secrets.json"))
 		dir := fakeContract(t, rr)
 
 		if err := runSecretBootstrap(testCmd(), nil); err != nil {
@@ -130,15 +143,15 @@ func TestRunSecretBootstrap(t *testing.T) {
 		if *dir != tmp {
 			t.Errorf("contract pinned to %q, want %q", *dir, tmp)
 		}
-		if len(rr.calls) != 1 {
-			t.Fatalf("got %d contract calls, want 1: %v", len(rr.calls), rr.calls)
+		if len(rr.rec.calls) != 1 {
+			t.Fatalf("got %d contract calls, want 1: %v", len(rr.rec.calls), rr.rec.calls)
 		}
 		want := []string{"secret", "set", "--client-token"}
-		if strings.Join(rr.calls[0], " ") != strings.Join(want, " ") {
-			t.Errorf("call = %v, want %v", rr.calls[0], want)
+		if strings.Join(rr.rec.calls[0], " ") != strings.Join(want, " ") {
+			t.Errorf("call = %v, want %v", rr.rec.calls[0], want)
 		}
-		if len(rr.env) != 1 || rr.env[0] != "NENYA_SECRETS_DIR="+tmp {
-			t.Errorf("env = %v, want NENYA_SECRETS_DIR=%s", rr.env, tmp)
+		if len(rr.rec.env) != 1 || rr.rec.env[0] != "NENYA_SECRETS_DIR="+tmp {
+			t.Errorf("env = %v, want NENYA_SECRETS_DIR=%s", rr.rec.env, tmp)
 		}
 	})
 
@@ -150,14 +163,14 @@ func TestRunSecretBootstrap(t *testing.T) {
 		bootstrapDir = tmp
 		bootstrapForce = false
 
-		rr := &recordingRunner{}
+		rr := newRecordingRunner()
 		fakeContract(t, rr)
 
 		if err := runSecretBootstrap(testCmd(), nil); err == nil {
 			t.Fatal("expected error for existing token")
 		}
-		if len(rr.calls) != 0 {
-			t.Errorf("contract must not be called when a token exists: %v", rr.calls)
+		if len(rr.rec.calls) != 0 {
+			t.Errorf("contract must not be called when a token exists: %v", rr.rec.calls)
 		}
 	})
 
@@ -172,7 +185,8 @@ func TestRunSecretBootstrap(t *testing.T) {
 		bootstrapDir = tmp
 		bootstrapForce = false
 
-		rr := &recordingRunner{out: []byte(filepath.Join(tmp, "secrets", "01-client.json"))}
+		rr := newRecordingRunner()
+		rr.out = []byte(filepath.Join(tmp, "secrets", "01-client.json"))
 		dir := fakeContract(t, rr)
 
 		if err := runSecretBootstrap(testCmd(), nil); err != nil {
@@ -192,7 +206,8 @@ func TestRunSecretSet(t *testing.T) {
 	secretSetDir = tmp
 	secretSetProvider = "openai"
 
-	rr := &recordingRunner{out: []byte(filepath.Join(tmp, "secrets.json"))}
+	rr := newRecordingRunner()
+	rr.out = []byte(filepath.Join(tmp, "secrets.json"))
 	dir := fakeContract(t, rr)
 
 	if err := runSecretSet(testCmd(), []string{"sk-test"}); err != nil {
@@ -202,8 +217,8 @@ func TestRunSecretSet(t *testing.T) {
 		t.Errorf("contract pinned to %q, want %q", *dir, tmp)
 	}
 	want := []string{"secret", "set", "--provider", "openai", "sk-test"}
-	if len(rr.calls) != 1 || strings.Join(rr.calls[0], " ") != strings.Join(want, " ") {
-		t.Errorf("calls = %v, want one call %v", rr.calls, want)
+	if len(rr.rec.calls) != 1 || strings.Join(rr.rec.calls[0], " ") != strings.Join(want, " ") {
+		t.Errorf("calls = %v, want one call %v", rr.rec.calls, want)
 	}
 
 	t.Run("requires --provider", func(t *testing.T) {

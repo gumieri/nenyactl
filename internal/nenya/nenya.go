@@ -116,19 +116,24 @@ func runBounded(ctx context.Context, runner Runner, timeout time.Duration, args 
 	defer cancel()
 	out, err := runner.Output(ctx, args...)
 	if err != nil && ctx.Err() != nil {
-		return out, fmt.Errorf("%w: %v", ctx.Err(), err)
+		return out, fmt.Errorf("%w: %w", ctx.Err(), err)
 	}
 	return out, err
 }
 
 // commandError builds a non-leaking error for a failed command. Secret commands
 // carry an API key or client token as an argument and may echo it on stderr, so
-// neither the argument values nor stderr are included.
+// neither the argument values nor stderr are included. `config set` can also
+// carry a secret in its value, so the value is scrubbed from stderr.
 func commandError(args []string, err error, stderr string) error {
+	msg := strings.TrimSpace(stderr)
 	if isSecretCommand(args) {
 		return fmt.Errorf("nenya %s: %w", redactedArgs(args), err)
 	}
-	if msg := strings.TrimSpace(stderr); msg != "" {
+	if isConfigSet(args) && msg != "" {
+		msg = strings.ReplaceAll(msg, args[len(args)-1], "<value>")
+	}
+	if msg != "" {
 		return fmt.Errorf("nenya %s: %w: %s", redactedArgs(args), err, msg)
 	}
 	return fmt.Errorf("nenya %s: %w", redactedArgs(args), err)
@@ -139,13 +144,18 @@ func isSecretCommand(args []string) bool {
 	return len(args) > 0 && args[0] == "secret"
 }
 
+// isConfigSet reports whether args invokes `nenya config set ...`.
+func isConfigSet(args []string) bool {
+	return len(args) >= 2 && args[0] == "config" && args[1] == "set"
+}
+
 // redactedArgs renders an invocation for an error message, omitting the values
 // of secret commands and of `config set` (which can carry a secret in the value).
 func redactedArgs(args []string) string {
 	if isSecretCommand(args) {
 		return "secret set …"
 	}
-	if len(args) >= 2 && args[0] == "config" && args[1] == "set" {
+	if isConfigSet(args) {
 		return strings.Join(args[:len(args)-1], " ") + " <value>"
 	}
 	return strings.Join(args, " ")
