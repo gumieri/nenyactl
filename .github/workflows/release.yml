@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   release:
@@ -26,11 +27,16 @@ jobs:
           path: ~/go/pkg/mod
           key: go-mod-${{ hashFiles('go.sum') }}
 
+      # cosign must be on PATH for goreleaser's `signs` step to sign
+      # checksums.txt into checksums.txt.sigstore.json (keyless, no keys).
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v4.1.2
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: "~> 2"
-          args: release
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AUR_KEY: ${{ secrets.AUR_KEY }}

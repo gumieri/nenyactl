@@ -107,6 +107,21 @@ changelog:
 checksum:
   name_template: "checksums.txt"
 
+# Sign checksums.txt keylessly with cosign so consumers (and nenyactl itself)
+# can verify-blob it. Requires cosign on PATH (release workflow installs it).
+# Skipped for local snapshot builds: `goreleaser release --snapshot ...
+# --skip=sign`.
+signs:
+  - id: checksums
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args:
+      - "sign-blob"
+      - "--bundle=${signature}"
+      - "--yes"
+      - "${artifact}"
+    cmd: cosign
+
 release:
   github:
     owner: gumieri
