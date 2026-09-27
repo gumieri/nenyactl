@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/gumieri/nenyactl/internal/paths"
 )
 
 // HTTPDoer is the interface for making HTTP requests.
@@ -17,10 +19,9 @@ type HTTPDoer interface {
 }
 
 const (
-	owner   = "gumieri"
-	repo    = "nenya"
-	binDir  = "/usr/local/bin"
-	confDir = "/etc/nenya"
+	owner  = "gumieri"
+	repo   = "nenya"
+	binDir = "/usr/local/bin"
 )
 
 // Config controls an installation.
@@ -36,7 +37,26 @@ type Config struct {
 	CosignIdentityRegexp string
 	// CosignIssuer overrides the expected cosign OIDC issuer.
 	CosignIssuer string
+
+	// Test-only overrides (unexported; settable from same-package tests).
+	binDirOverride    string
+	configDirOverride string
+	unitDirOverride   string
 }
+
+// Platform hooks, overridable in tests.
+var (
+	systemConfigDir = func() string { return paths.SystemConfigDir() }
+	userConfigDir   = func() (string, error) { return paths.UserConfigDir() }
+	systemUnitDir   = func() string {
+		if runtime.GOOS == "darwin" {
+			return "/Library/LaunchDaemons"
+		}
+		return "/etc/systemd/system"
+	}
+	systemctlBin = "systemctl"
+	launchctlBin = "launchctl"
+)
 
 func Install(ctx context.Context, cfg Config) error {
 	return InstallWithHTTP(ctx, cfg, http.DefaultClient)
@@ -99,7 +119,9 @@ func InstallWithHTTPAndRunner(ctx context.Context, cfg Config, hc HTTPDoer, runn
 	}
 
 	dest := filepath.Join(binDir, "nenya")
-	if cfg.UserInstall {
+	if cfg.binDirOverride != "" {
+		dest = filepath.Join(cfg.binDirOverride, "nenya")
+	} else if cfg.UserInstall {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return fmt.Errorf("get home dir: %w", err)
@@ -118,10 +140,36 @@ func InstallWithHTTPAndRunner(ctx context.Context, cfg Config, hc HTTPDoer, runn
 
 	fmt.Printf("Installed nenya %s to %s\n", tag, dest)
 
-	if !cfg.SkipService {
-		if err := installServiceFiles(extractDir); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to install service files: %v\n", err)
-			fmt.Fprintln(os.Stderr, "You can run nenya directly from the command line.")
+	if cfg.UserInstall && !cfg.SkipService {
+		fmt.Fprintln(os.Stderr, "Note: --user installs the binary and user config only; no system service is written.")
+	}
+
+	// Full installs bootstrap config + secrets so the service can start, then
+	// load/enable the unit. --skip-service keeps this binary-only; --user skips
+	// the service but still bootstraps user config.
+	doService := !cfg.SkipService && !cfg.UserInstall
+	doBootstrap := !cfg.SkipService
+	if doBootstrap {
+		p := resolveInstallPaths(ctx, cfg, runner, dest)
+
+		serviceReady := true
+		if doService {
+			if err := installServiceFilesTo(extractDir, p.unitDir); err != nil {
+				serviceReady = false
+				fmt.Fprintf(os.Stderr, "Warning: failed to install service files: %v\n", err)
+				fmt.Fprintln(os.Stderr, "You can run nenya directly from the command line.")
+			}
+		}
+
+		if _, err := bootstrapConfig(ctx, runner, dest, p); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not create config: %v\n", err)
+		}
+		if _, err := bootstrapSecrets(p); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not create secrets: %v\n", err)
+		}
+
+		if doService && serviceReady {
+			enableService(ctx, runner, p.unitDir)
 		}
 	}
 
@@ -165,15 +213,22 @@ func verifyDownload(ctx context.Context, cfg Config, hc HTTPDoer, runner Command
 }
 
 func installServiceFiles(extractDir string) error {
+	return installServiceFilesTo(extractDir, systemUnitDir())
+}
+
+// installServiceFilesTo copies the shipped unit files from the archive into
+// unitDir. Unit contents are NOT generated here: the shipped units are the
+// contract source until `nenya service-unit` ships (CONTRACT.md §7.1/§4.5).
+func installServiceFilesTo(extractDir, unitDir string) error {
 	switch runtime.GOOS {
 	case "linux":
 		return copyFromExtract(extractDir, map[string]string{
-			"deploy/nenya.service": "/etc/systemd/system/nenya.service",
-			"deploy/nenya.socket":  "/etc/systemd/system/nenya.socket",
+			"deploy/nenya.service": filepath.Join(unitDir, "nenya.service"),
+			"deploy/nenya.socket":  filepath.Join(unitDir, "nenya.socket"),
 		})
 	case "darwin":
 		return copyFromExtract(extractDir, map[string]string{
-			"deploy/nenya.plist": "/Library/LaunchDaemons/com.gumieri.nenya.plist",
+			"deploy/nenya.plist": filepath.Join(unitDir, "com.gumieri.nenya.plist"),
 		})
 	}
 	return nil

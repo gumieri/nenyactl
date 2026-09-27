@@ -17,7 +17,10 @@ Linux:   Installs systemd units (nenya.service + nenya.socket)
 macOS:   Installs launchd plist
 Windows: Not supported (use 'nenyactl containers setup' instead)
 
-The binary is installed to /usr/local/bin (system) or ~/.local/bin (user).`,
+The binary is installed to /usr/local/bin (system) or ~/.local/bin (user).
+A full install also bootstraps config.json and secrets.json (mode 0600) when
+missing, then loads and enables the service. Use --skip-service for a
+binary-only install; --user bootstraps user config without system units.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runInstall,
 }

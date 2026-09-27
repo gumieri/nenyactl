@@ -35,6 +35,30 @@ func ContainerDir() (string, error) {
 	return filepath.Join(base, "nenyactl", "nenya"), nil
 }
 
+// UserConfigDir returns the per-user config directory for nenya
+// ($XDG_CONFIG_HOME/nenya on Linux, Application Support on macOS,
+// %APPDATA%\nenya on Windows).
+func UserConfigDir() (string, error) {
+	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
+		return filepath.Join(d, "nenya"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home, "Library", "Application Support", "nenya"), nil
+	case "windows":
+		if d := os.Getenv("APPDATA"); d != "" {
+			return filepath.Join(d, "nenya"), nil
+		}
+		return filepath.Join(home, "AppData", "Roaming", "nenya"), nil
+	default:
+		return filepath.Join(home, ".config", "nenya"), nil
+	}
+}
+
 func SystemConfigDir() string {
 	switch runtime.GOOS {
 	case "darwin":
