@@ -144,7 +144,7 @@ func TestDiagnoseFailures(t *testing.T) {
 
 		r := checkSecrets(context.Background(), res, nenya.Description{}, true)
 		if r.Status != checkWarn || !strings.Contains(r.Detail, "resolved no client token") {
-			t.Errorf("got %+v, want a warn naming the reader failure", r)
+			t.Errorf("got %+v, want a warn naming the empty-success disagreement", r)
 		}
 	})
 

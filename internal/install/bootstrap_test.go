@@ -189,6 +189,42 @@ func TestBootstrapSecrets(t *testing.T) {
 		}
 	})
 
+	t.Run("complements the guard with the local scan when the reader errors", func(t *testing.T) {
+		// Writer supported, reader supported-but-failing, and a local token:
+		// the complement must prevent rotation (no secret set call at all).
+		dir := t.TempDir()
+		p := installPaths{
+			configDir:   dir,
+			secretsFile: filepath.Join(dir, "secrets.json"),
+			secretsDir:  dir,
+		}
+		if err := os.WriteFile(p.secretsFile, []byte(`{"client_token":"nk-existing"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var calls []string
+		r := scriptRunner{
+			outputs: map[string]string{
+				"/bin/nenya secret set -h": "usage: nenya secret set …",
+				// Reader exists but fails (e.g. an invalid sibling document).
+				"/bin/nenya secret get --client-token --config-dir " + dir: "",
+			},
+			calls: &calls,
+		}
+		created, err := bootstrapSecrets(context.Background(), r, "/bin/nenya", p)
+		if err != nil || created {
+			t.Fatalf("created=%v err=%v, want a skipped bootstrap", created, err)
+		}
+		data, _ := os.ReadFile(p.secretsFile)
+		if !strings.Contains(string(data), "nk-existing") {
+			t.Errorf("existing token changed: %q", data)
+		}
+		for _, c := range calls {
+			if strings.Contains(c, "secret set --client-token") {
+				t.Errorf("install rotated the token via %q", c)
+			}
+		}
+	})
+
 	t.Run("does not rotate existing token", func(t *testing.T) {
 		dir := t.TempDir()
 		p := installPaths{secretsFile: filepath.Join(dir, "secrets.json")}

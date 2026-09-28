@@ -435,7 +435,7 @@ func writeUnitFile(path string, content []byte) error {
 
 // installServiceFilesTo copies the shipped unit files from the archive into
 // unitDir. It is the documented fallback used when `nenya service-unit` is not
-// available; prefer installServiceUnits.
+// available; prefer installServiceUnitsAt, which reports generation.
 func installServiceFilesTo(extractDir, unitDir string) error {
 	var files []extractFile
 	for _, spec := range unitSpecs() {

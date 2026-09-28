@@ -543,13 +543,6 @@ func (m tuiModel) Results() map[string]string {
 	return result
 }
 
-// CollectProviderKeys runs the provider-key picker with the scaffold-time
-// provider shim. Prefer CollectProviderKeysFrom when a nenya binary is
-// available.
-func CollectProviderKeys() (map[string]string, error) {
-	return CollectProviderKeysFrom(BuiltinProviders)
-}
-
 // CollectProviderKeysFrom runs the provider-key picker with the given provider
 // catalog. Callers with an installed nenya pass the contract catalog so the
 // picker matches what the gateway actually supports.
