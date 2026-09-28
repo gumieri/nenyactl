@@ -129,6 +129,13 @@ func TestRunSecretGenerate(t *testing.T) {
 }
 
 func TestClientTokenShim(t *testing.T) {
+	// Keep the resolution hermetic: no real nenya, no paths refinement.
+	saved := pathsProbe
+	pathsProbe = func(ctx context.Context, dir string) (*nenya.Paths, error) {
+		return nil, errors.New("paths probe disabled")
+	}
+	t.Cleanup(func() { pathsProbe = saved })
+
 	// The shim resolves from the deployment's secrets dir and must IGNORE a
 	// bare `secrets` file: that name belongs to $CREDENTIALS_DIRECTORY
 	// (CONTRACT.md §6.1 source 1), which only the server resolves.
