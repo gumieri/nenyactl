@@ -191,6 +191,7 @@ func bootstrapSecrets(ctx context.Context, runner CommandRunner, execPath string
 		// unpinned call would resolve nenya's §3.3 default (the system root)
 		// and inspect — or rotate — another deployment's token.
 		client := nenya.New(nenyaRunner{runner: runner, execPath: execPath}).WithConfigDir(p.configDir)
+		guardedByReader := false
 		if client.SecretGetSupported(ctx) {
 			// The reader sees credential-dir and env sources a local scan
 			// cannot; if it resolves a token, this install must not create
@@ -198,11 +199,18 @@ func bootstrapSecrets(ctx context.Context, runner CommandRunner, execPath string
 			if tok, err := client.SecretGet(ctx, "client-token"); err == nil && tok != "" {
 				fmt.Fprintf(os.Stderr, "Warning: the deployment already resolves a client token; not creating %s.\n", p.secretsFile)
 				return false, nil
+			} else if err == nil {
+				guardedByReader = true
 			}
-		} else if found := secrets.ExistingTokenFile(p.secretsDir); found != "" {
-			// Writer without reader: complement with the local scan.
-			fmt.Fprintf(os.Stderr, "Warning: a client token already exists in %s; not creating %s.\n", found, p.secretsFile)
-			return false, nil
+		}
+		// The guard did not resolve a token. When the reader was unavailable
+		// or failed (not a clean "none"), complement with the local scan so an
+		// existing token is never rotated.
+		if !guardedByReader {
+			if found := secrets.ExistingTokenFile(p.secretsDir); found != "" {
+				fmt.Fprintf(os.Stderr, "Warning: a client token already exists in %s; not creating %s.\n", found, p.secretsFile)
+				return false, nil
+			}
 		}
 		path, err := client.SetClientTokenInRoot(ctx, p.configDir, "")
 		if err != nil {

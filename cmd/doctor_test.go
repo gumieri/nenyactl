@@ -132,7 +132,9 @@ func TestDiagnoseFailures(t *testing.T) {
 					rr.out = []byte("usage: nenya secret get …") // reader exists
 					return
 				}
-				rr.err = errors.New("exit status 1") // reader runs, resolves nothing
+				// Reader runs clean but resolves nothing (exit 0, empty
+				// stdout): the sentinel disagreement path.
+				rr.out = nil
 			}
 		}
 		newContractClient = func(d string) *nenya.Client {
@@ -141,7 +143,7 @@ func TestDiagnoseFailures(t *testing.T) {
 		t.Cleanup(func() { newContractClient = saved })
 
 		r := checkSecrets(context.Background(), res, nenya.Description{}, true)
-		if r.Status != checkWarn || !strings.Contains(r.Detail, "nenya secret get failed") {
+		if r.Status != checkWarn || !strings.Contains(r.Detail, "resolved no client token") {
 			t.Errorf("got %+v, want a warn naming the reader failure", r)
 		}
 	})
