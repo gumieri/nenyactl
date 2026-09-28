@@ -67,7 +67,7 @@ type checkResult struct {
 
 func runDoctor(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
-	res, err := resolveLifecycleDir(doctorDir)
+	res, err := resolveLifecycleDir(ctx, doctorDir)
 	if err != nil {
 		printCheck(checkResult{Name: "deployment", Status: checkFail, Detail: err.Error(), Fix: deploymentFix(err)})
 		return fmt.Errorf("deployment: %w", err)
@@ -117,7 +117,9 @@ func deploymentFix(err error) string {
 }
 
 // diagnose runs every check against the resolved deployment. It fetches the
-// effective description once and shares it, so doctor spawns `nenya` once.
+// effective description once and shares it, so the describe call is not
+// repeated per check (resolution and the secrets check make their own
+// contract probes).
 func diagnose(ctx context.Context, res dirResolution, doer healthDoer) []checkResult {
 	client := res.Contract()
 	desc, descErr := client.Describe(ctx)
@@ -188,15 +190,26 @@ func checkSecrets(ctx context.Context, res dirResolution, desc nenya.Description
 
 	// Token presence through nenya's single reader first (§4.8): it resolves
 	// the deployment's real source order, which a directory guess cannot. The
-	// file shim covers released binaries without `secret get`.
-	token, viaContract := clientToken(ctx, res)
+	// file shim covers released binaries without `secret get`; when the reader
+	// ran and the shim disagrees, say so instead of picking a winner silently.
+	token, viaContract, contractErr := clientToken(ctx, res)
 	if token == "" {
-		return checkResult{Name: "secrets", Status: checkFail, Detail: "no client token in " + dir, Fix: "run `nenyactl up`"}
+		detail := "no client token in " + dir
+		if contractErr != nil {
+			detail += " (nenya secret get: " + contractErr.Error() + ")"
+		}
+		return checkResult{Name: "secrets", Status: checkFail, Detail: detail, Fix: "run `nenyactl up`"}
 	}
 
 	detail := fmt.Sprintf("client token resolves (%s)", dir)
-	if viaContract {
+	switch {
+	case viaContract:
 		detail = "client token resolves via nenya secret get"
+	case contractErr != nil && haveDesc:
+		// The contract is reachable and its reader ran, yet it did not return
+		// the token the local shim found: a real disagreement about which
+		// source is effective. Distinguish, don't hide.
+		return checkResult{Name: "secrets", Status: checkWarn, Detail: "token in " + dir + ", but nenya secret get failed: " + contractErr.Error(), Fix: "reconcile the secrets sources, then re-run `nenyactl doctor`"}
 	}
 
 	// Check permissions on every secrets file we can see, not just the

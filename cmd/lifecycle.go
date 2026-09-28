@@ -57,9 +57,9 @@ func init() {
 
 // resolveLifecycleDir resolves the deployment for a lifecycle command: an
 // explicit --dir wins, otherwise the machine's installation is auto-detected.
-func resolveLifecycleDir(dir string) (dirResolution, error) {
+func resolveLifecycleDir(ctx context.Context, dir string) (dirResolution, error) {
 	if dir != "" {
-		return resolveDir(dir, dirAttach, false)
+		return resolveDir(ctx, dir, dirAttach, false)
 	}
 	info, err := detect.Detect()
 	if err != nil {
@@ -69,7 +69,7 @@ func resolveLifecycleDir(dir string) (dirResolution, error) {
 }
 
 func runDown(cmd *cobra.Command, args []string) error {
-	res, err := resolveLifecycleDir(downDir)
+	res, err := resolveLifecycleDir(cmd.Context(), downDir)
 	if err != nil {
 		return err
 	}
@@ -90,7 +90,7 @@ type healthDoer interface {
 var statusHTTPClient healthDoer = &http.Client{Timeout: 3 * time.Second}
 
 func runStatus(cmd *cobra.Command, args []string) error {
-	res, err := resolveLifecycleDir(statusDir)
+	res, err := resolveLifecycleDir(cmd.Context(), statusDir)
 	if err != nil {
 		return err
 	}
@@ -155,21 +155,20 @@ func buildStatus(ctx context.Context, res dirResolution, doer healthDoer) string
 	// The secrets location is the contract's answer, not ours: the effective
 	// source when describe resolved one (it names the winning file or
 	// directory, e.g. the systemd credential), else the preferred file from
-	// paths --json, else the resolved secrets dir. The bare-metal fallback
-	// label stays "Secrets dir" because only a directory is then known.
-	secretsLabel, secretsValue := "Secrets dir", secretsDir
+	// paths --json, else the resolved secrets dir.
+	secretsValue := secretsDir
 	if haveDesc {
 		switch {
 		case desc.Secrets.ActiveSource != "":
-			secretsLabel, secretsValue = "Secrets", desc.Secrets.ActiveSource
+			secretsValue = desc.Secrets.ActiveSource
 		case desc.Paths.SecretsFile != nil && *desc.Paths.SecretsFile != "":
-			secretsLabel, secretsValue = "Secrets", *desc.Paths.SecretsFile
+			secretsValue = *desc.Paths.SecretsFile
 		case desc.Paths.SecretsDir != "":
 			secretsValue = desc.Paths.SecretsDir
 		}
 	}
 	fmt.Fprintf(&b, "Config dir:  %s\n", configDir)
-	fmt.Fprintf(&b, "%s:%s%s\n", secretsLabel, strings.Repeat(" ", max(1, 12-len(secretsLabel))), secretsValue)
+	fmt.Fprintf(&b, "Secrets:     %s\n", secretsValue)
 	port := statusPort(res, desc, haveDesc)
 	if port == "" {
 		fmt.Fprintf(&b, "Port:        unknown\n")

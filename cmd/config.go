@@ -45,7 +45,7 @@ func init() {
 }
 
 func runConfigInit(cmd *cobra.Command, args []string) error {
-	res, err := resolveDir(configDir, dirCreate, false)
+	res, err := resolveDir(cmd.Context(), configDir, dirCreate, false)
 	if err != nil {
 		return err
 	}
@@ -102,7 +102,7 @@ func runConfigEdit(cmd *cobra.Command, args []string) error {
 	var res dirResolution
 	if configEditDir != "" {
 		var err error
-		res, err = resolveDir(configEditDir, dirAttach, false)
+		res, err = resolveDir(cmd.Context(), configEditDir, dirAttach, false)
 		if err != nil {
 			return err
 		}

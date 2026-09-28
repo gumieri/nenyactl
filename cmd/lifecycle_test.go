@@ -36,7 +36,7 @@ func TestBuildStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := resolveDir(dir, dirAttach, false)
+	res, err := resolveDir(context.Background(), dir, dirAttach, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestBuildStatusHandlesUnreachableAndNoContract(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	res, err := resolveDir(dir, dirAttach, false)
+	res, err := resolveDir(context.Background(), dir, dirAttach, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestResolveLifecycleDirExplicit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	res, err := resolveLifecycleDir(dir)
+	res, err := resolveLifecycleDir(context.Background(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}

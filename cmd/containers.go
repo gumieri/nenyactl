@@ -115,7 +115,7 @@ func runContainerSetup(cmd *cobra.Command, args []string) error {
 }
 
 func runContainerSetupWithExec(ctx context.Context, ex execer, dir, listenAddr string, startAfter bool) error {
-	res, err := resolveDir(dir, dirCreate, true)
+	res, err := resolveDir(ctx, dir, dirCreate, true)
 	if err != nil {
 		return err
 	}
@@ -195,7 +195,9 @@ func runContainerStart(cmd *cobra.Command, args []string) error {
 }
 
 func runContainerStartWithExec(ex execer, dir string) error {
-	res, err := resolveDir(dir, dirAttach, true)
+	// context.Background(): the bounded probe bounds any hang; these seams are
+	// test entry points without a cobra context.
+	res, err := resolveDir(context.Background(), dir, dirAttach, true)
 	if err != nil {
 		return err
 	}
@@ -227,7 +229,7 @@ func runContainerStop(cmd *cobra.Command, _ []string) error {
 }
 
 func runContainerStopWithExec(ex execer, dir string) error {
-	res, err := resolveDir(dir, dirAttach, true)
+	res, err := resolveDir(context.Background(), dir, dirAttach, true)
 	if err != nil {
 		return err
 	}
@@ -245,7 +247,7 @@ func runContainerStopWithExec(ex execer, dir string) error {
 // runContainerRestartWithExec restarts the compose services so a running
 // container re-reads the bind-mounted secrets after a key change.
 func runContainerRestartWithExec(ex execer, dir string) error {
-	res, err := resolveDir(dir, dirAttach, true)
+	res, err := resolveDir(context.Background(), dir, dirAttach, true)
 	if err != nil {
 		return err
 	}
@@ -281,7 +283,7 @@ func runContainerStatus(cmd *cobra.Command, _ []string) error {
 }
 
 func runContainerStatusWithExec(ex execer, dir string) error {
-	res, err := resolveDir(dir, dirAttach, true)
+	res, err := resolveDir(context.Background(), dir, dirAttach, true)
 	if err != nil {
 		return err
 	}

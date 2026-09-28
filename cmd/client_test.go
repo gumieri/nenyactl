@@ -47,7 +47,7 @@ func TestResolvedEndpoint(t *testing.T) {
 		rr.out = []byte(`{"contract_version":1,"config":{}}`)
 		fakeContract(t, rr)
 
-		res, err := resolveDir(dir, dirAttach, false)
+		res, err := resolveDir(context.Background(), dir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -81,7 +81,7 @@ func TestResolvedEndpoint(t *testing.T) {
 		rr.out = []byte(`{"contract_version":1,"config":{"server":{"listen_addr":":8080"}}}`)
 		fakeContract(t, rr)
 
-		res, err := resolveDir(dir, dirAttach, false)
+		res, err := resolveDir(context.Background(), dir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -107,7 +107,7 @@ func TestResolvedEndpoint(t *testing.T) {
 		contractDispatch(rr, `{"contract_version":1,"config":{"server":{"listen_addr":":8080"}}}`, "")
 		fakeContract(t, rr)
 
-		res, err := resolveDir(dir, dirAttach, false)
+		res, err := resolveDir(context.Background(), dir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -140,7 +140,7 @@ func TestResolvedEndpoint(t *testing.T) {
 		contractDispatch(rr, `{"contract_version":1,"config":{"server":{"listen_addr":":8080"}}}`, "nk-contract")
 		fakeContract(t, rr)
 
-		res, err := resolveDir(dir, dirAttach, false)
+		res, err := resolveDir(context.Background(), dir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -168,7 +168,7 @@ func TestResolvedEndpoint(t *testing.T) {
 		contractDispatch(rr, `{"contract_version":1,"config":{"server":{"listen_addr":":9090"}}}`, "nk-contract")
 		fakeContract(t, rr)
 
-		res, err := resolveDir(dir, dirAttach, false)
+		res, err := resolveDir(context.Background(), dir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -190,7 +190,7 @@ func TestResolvedEndpoint(t *testing.T) {
 		contractDispatch(rr, `{"contract_version":1,"config":{"server":{"listen_addr":":8080"}}}`, "")
 		fakeContract(t, rr)
 
-		res, err := resolveDir(dir, dirAttach, false)
+		res, err := resolveDir(context.Background(), dir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -211,7 +211,7 @@ func TestResolvedEndpoint(t *testing.T) {
 		rr.out = []byte(`{"contract_version":1,"config":{}}`)
 		fakeContract(t, rr)
 
-		res, err := resolveDir(dir, dirAttach, false)
+		res, err := resolveDir(context.Background(), dir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}

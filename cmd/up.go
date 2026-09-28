@@ -68,7 +68,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 // to reinstall, so those errors are surfaced rather than retried.
 func ensureDeployment(ctx context.Context, dir string) (dirResolution, error) {
 	if dir != "" {
-		return resolveDir(dir, dirAttach, false)
+		return resolveDir(ctx, dir, dirAttach, false)
 	}
 
 	info, err := upDetect()

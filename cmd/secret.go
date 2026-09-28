@@ -92,7 +92,7 @@ func init() {
 }
 
 func runSecretBootstrap(cmd *cobra.Command, args []string) error {
-	res, err := resolveDir(bootstrapDir, dirCreate, false)
+	res, err := resolveDir(cmd.Context(), bootstrapDir, dirCreate, false)
 	if err != nil {
 		return err
 	}
@@ -103,8 +103,17 @@ func runSecretBootstrap(cmd *cobra.Command, args []string) error {
 	}
 
 	if !bootstrapForce {
-		if existing := secrets.ExistingTokenFile(secretsDir); existing != "" {
-			return fmt.Errorf("client token already exists in %s; use --force to replace it", existing)
+		// The guard must see what nenya sees: a token in a systemd credential
+		// or a non-local NENYA_SECRETS_DIR is invisible to a local file scan,
+		// yet `secret set` would overwrite it.
+		tok, _, _ := clientToken(cmd.Context(), res)
+		existing := secrets.ExistingTokenFile(secretsDir)
+		if tok != "" || existing != "" {
+			detail := res.Path
+			if existing != "" {
+				detail = existing
+			}
+			return fmt.Errorf("client token already exists (%s); use --force to replace it", shellQuoteAll([]string{detail}))
 		}
 	}
 
@@ -151,15 +160,18 @@ func init() {
 // released binaries without that command fall back to the documented file shim
 // over the deployment's secrets directory. Container deployments read the merge
 // directory the compose file mounts at /run/secrets/nenya. viaContract reports
-// that the token came from the contract rather than the shim.
-func clientToken(ctx context.Context, res dirResolution) (token string, viaContract bool) {
+// that the token came from the contract rather than the shim; contractErr is
+// the reader's error (unsupported command, or a real failure) for callers that
+// must distinguish "shim found it" from "nenya agreed".
+func clientToken(ctx context.Context, res dirResolution) (token string, viaContract bool, contractErr error) {
 	if res.Kind == dirContainerRoot {
-		return containers.ClientToken(res.Path), false
+		return containers.ClientToken(res.Path), false, nil
 	}
-	if tok, err := res.Contract().SecretGet(ctx, "client-token"); err == nil && tok != "" {
-		return tok, true
+	tok, err := res.Contract().SecretGet(ctx, "client-token")
+	if err == nil && tok != "" {
+		return tok, true, nil
 	}
-	return secrets.ClientTokenInDir(res.Info.SecretsDir()), false
+	return secrets.ClientTokenInDir(res.Info.SecretsDir()), false, err
 }
 
 func runSecretSet(cmd *cobra.Command, args []string) error {
@@ -170,7 +182,7 @@ func runSecretSet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("usage: nenyactl secret set --provider <name> <api-key>")
 	}
 
-	res, err := resolveDir(secretSetDir, dirAttach, false)
+	res, err := resolveDir(cmd.Context(), secretSetDir, dirAttach, false)
 	if err != nil {
 		return err
 	}

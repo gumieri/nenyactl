@@ -55,7 +55,7 @@ func TestUpDeployment(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(base, "config.json"), []byte(`{"server":{"listen_addr":":18080"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	res, err := resolveDir(base, dirAttach, false)
+	res, err := resolveDir(context.Background(), base, dirAttach, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestUpDeployment(t *testing.T) {
 
 func TestUpDeploymentCreatesMissingConfig(t *testing.T) {
 	base := t.TempDir()
-	res, err := resolveDir(base, dirCreate, false)
+	res, err := resolveDir(context.Background(), base, dirCreate, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestUpDeploymentReloadsAfterSavingKeys(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(base, "config.json"), []byte(`{"server":{"listen_addr":":18081"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	res, err := resolveDir(base, dirAttach, false)
+	res, err := resolveDir(context.Background(), base, dirAttach, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestUpDeploymentRestartsContainersAfterSavingKeys(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(base, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	res, err := resolveDir(base, dirAttach, false)
+	res, err := resolveDir(context.Background(), base, dirAttach, false)
 	if err != nil {
 		t.Fatal(err)
 	}

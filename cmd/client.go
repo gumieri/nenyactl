@@ -62,7 +62,7 @@ func runClientAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--show-token only applies to printed output")
 	}
 
-	res, err := resolveDir(clientDir, dirAttach, false)
+	res, err := resolveDir(cmd.Context(), clientDir, dirAttach, false)
 	if err != nil {
 		return err
 	}
@@ -126,9 +126,9 @@ func resolvedEndpoint(ctx context.Context, res dirResolution) (clients.Endpoint,
 	}
 	base := "http://localhost:" + port
 
-	token, _ := clientToken(ctx, res)
+	token, _, _ := clientToken(ctx, res)
 	if token == "" {
-		return clients.Endpoint{}, fmt.Errorf("no client token found for %s; create one with 'nenyactl secret bootstrap --dir %s'", res.Path, res.Path)
+		return clients.Endpoint{}, fmt.Errorf("no client token found for %s; create one with 'nenyactl secret bootstrap --dir %s'", res.Path, shellQuoteAll([]string{res.Path}))
 	}
 	return clients.Endpoint{BaseURL: base, Token: token}, nil
 }

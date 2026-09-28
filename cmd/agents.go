@@ -45,7 +45,7 @@ func runAgents(cmd *cobra.Command, args []string) error {
 	var res dirResolution
 	if agentsDir != "" {
 		var err error
-		res, err = resolveDir(agentsDir, dirAttach, false)
+		res, err = resolveDir(cmd.Context(), agentsDir, dirAttach, false)
 		if err != nil {
 			return err
 		}

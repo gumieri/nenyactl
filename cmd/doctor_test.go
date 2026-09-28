@@ -21,7 +21,7 @@ func TestDiagnose(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := resolveDir(base, dirAttach, false)
+	res, err := resolveDir(context.Background(), base, dirAttach, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestDiagnose(t *testing.T) {
 func TestDiagnoseFailures(t *testing.T) {
 	t.Run("missing config fails", func(t *testing.T) {
 		dir := t.TempDir()
-		res, err := resolveDir(dir, dirAttach, false)
+		res, err := resolveDir(context.Background(), dir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -73,7 +73,7 @@ func TestDiagnoseFailures(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "config.d", "00-server.json"), []byte("{}"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		res, err := resolveDir(dir, dirAttach, false)
+		res, err := resolveDir(context.Background(), dir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -84,7 +84,7 @@ func TestDiagnoseFailures(t *testing.T) {
 
 	t.Run("missing token fails", func(t *testing.T) {
 		dir := t.TempDir()
-		res, err := resolveDir(dir, dirAttach, false)
+		res, err := resolveDir(context.Background(), dir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -101,7 +101,7 @@ func TestDiagnoseFailures(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "02-extra.json"), []byte(`{"client_token":"nk-y"}`), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		res, err := resolveDir(dir, dirAttach, false)
+		res, err := resolveDir(context.Background(), dir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -113,7 +113,7 @@ func TestDiagnoseFailures(t *testing.T) {
 
 	t.Run("systemd credential source is ok", func(t *testing.T) {
 		dir := t.TempDir()
-		res, err := resolveDir(dir, dirAttach, false)
+		res, err := resolveDir(context.Background(), dir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -126,7 +126,7 @@ func TestDiagnoseFailures(t *testing.T) {
 
 	t.Run("out-of-range contract fails", func(t *testing.T) {
 		dir := t.TempDir()
-		res, err := resolveDir(dir, dirAttach, false)
+		res, err := resolveDir(context.Background(), dir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}

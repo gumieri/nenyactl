@@ -57,7 +57,7 @@ func TestRunConfigInit(t *testing.T) {
 		configDir = tmp
 		defer func() { configDir = saved }()
 
-		if err := runConfigInit(nil, nil); err != nil {
+		if err := runConfigInit(testCmd(), nil); err != nil {
 			t.Fatalf("runConfigInit() error = %v", err)
 		}
 		if _, err := os.Stat(filepath.Join(tmp, "config.json")); os.IsNotExist(err) {

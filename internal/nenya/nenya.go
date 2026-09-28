@@ -155,7 +155,12 @@ func isConfigSet(args []string) bool {
 // of secret commands and of `config set` (which can carry a secret in the value).
 func redactedArgs(args []string) string {
 	if isSecretCommand(args) {
-		return "secret set …"
+		// The subcommand is not sensitive; the (possible) argument value is.
+		sub := "set"
+		if len(args) > 1 && args[1] == "get" {
+			sub = "get"
+		}
+		return "secret " + sub + " …"
 	}
 	if isConfigSet(args) {
 		return strings.Join(args[:len(args)-1], " ") + " <value>"
@@ -279,7 +284,7 @@ func (c *Client) SecretGet(ctx context.Context, selector string) (string, error)
 		args = append(args, "--provider", selector)
 	}
 	args = append(args, c.target()...)
-	out, err := runBounded(ctx, c.runner, probeTimeout, args...)
+	out, err := c.output(ctx, args...)
 	if err != nil {
 		return "", fmt.Errorf("nenya secret get: %w", err)
 	}
@@ -306,6 +311,29 @@ func (c *Client) SetConfig(ctx context.Context, dottedKey, value string) (string
 type SecretWriter struct {
 	runner Runner
 	dir    string
+}
+
+// SetClientTokenInRoot writes the client token through the single writer with
+// the config root selected via --config-dir (CONTRACT.md §4.7): nenya then
+// targets <root>/secrets.json and resolves the secrets sources for that root.
+// Install uses this form because its target is a config root (possibly a
+// non-default or user one), not a secrets directory; a refusal (for example an
+// active systemd credential source) is returned, never worked around.
+// The value is passed verbatim; empty means "generate".
+func (c *Client) SetClientTokenInRoot(ctx context.Context, configRoot, token string) (string, error) {
+	args := []string{"secret", "set"}
+	if configRoot != "" {
+		args = append(args, "--config-dir", configRoot)
+	}
+	args = append(args, "--client-token")
+	if token != "" {
+		args = append(args, token)
+	}
+	out, err := runBounded(ctx, c.runner, writeTimeout, args...)
+	if err != nil {
+		return "", commandError(args, err, "")
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // SecretWriterFor returns a SecretWriter targeting dir. It injects

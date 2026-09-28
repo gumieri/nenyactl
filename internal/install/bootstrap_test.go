@@ -93,12 +93,12 @@ func TestBootstrapConfig(t *testing.T) {
 func TestBootstrapSecrets(t *testing.T) {
 	t.Run("routes through nenya secret set when supported", func(t *testing.T) {
 		dir := t.TempDir()
-		p := installPaths{secretsFile: filepath.Join(dir, "secrets.json")}
+		p := installPaths{configDir: dir, secretsFile: filepath.Join(dir, "secrets.json")}
 		var calls []string
 		r := scriptRunner{
 			outputs: map[string]string{
-				"/bin/nenya secret get -h":             "usage: nenya secret get …",
-				"/bin/nenya secret set --client-token": filepath.Join(dir, "secrets.json") + "\n",
+				"/bin/nenya secret set -h":                                      "usage: nenya secret set …",
+				"/bin/nenya secret set --config-dir " + dir + " --client-token": filepath.Join(dir, "secrets.json") + "\n",
 			},
 			calls: &calls,
 		}
@@ -107,8 +107,11 @@ func TestBootstrapSecrets(t *testing.T) {
 			t.Fatalf("created=%v err=%v", created, err)
 		}
 		joined := strings.Join(calls, "\n")
-		if !strings.Contains(joined, "nenya secret set --client-token") {
-			t.Errorf("the write must go through the single writer: %s", joined)
+		// The write must be pinned to the install's config root: an untargeted
+		// `secret set` would resolve nenya's §3.3 default instead.
+		want := "/bin/nenya secret set --config-dir " + dir + " --client-token"
+		if !strings.Contains(joined, want) {
+			t.Errorf("the write must go through the single writer pinned to the root:\n want %q\n got  %s", want, joined)
 		}
 		// The shim must not also have written a file behind nenya's back.
 		if _, err := os.Stat(p.secretsFile); !os.IsNotExist(err) {
@@ -124,7 +127,7 @@ func TestBootstrapSecrets(t *testing.T) {
 			outputs: map[string]string{
 				// Supported binary; the write fails (e.g. an active systemd
 				// credential source). The shim must NOT kick in here.
-				"/bin/nenya secret get -h": "usage: nenya secret get …",
+				"/bin/nenya secret set -h": "usage: nenya secret set …",
 			},
 			calls: &calls,
 		}
@@ -140,7 +143,7 @@ func TestBootstrapSecrets(t *testing.T) {
 	t.Run("falls back to a hand-written 0600 token without the writer", func(t *testing.T) {
 		dir := t.TempDir()
 		p := installPaths{secretsFile: filepath.Join(dir, "secrets.json")}
-		// scriptRunner errors on every command: `secret get -h` is absent.
+		// scriptRunner errors on every command: the writer probe is absent.
 		var calls []string
 		r := scriptRunner{calls: &calls}
 		created, err := bootstrapSecrets(context.Background(), r, "/bin/nenya", p)
@@ -242,7 +245,7 @@ func TestInstallSystemBootstraps(t *testing.T) {
 	var calls []string
 	runner := multiRunner{
 		fallback: scriptRunner{outputs: r.outputs, calls: &calls},
-		failKeys: []string{dest + " secret get -h"},
+		failKeys: []string{dest + " secret set -h"},
 	}
 
 	cfg := Config{
@@ -300,7 +303,7 @@ func TestInstallSecretsDirFromPaths(t *testing.T) {
 			dest + " example-config": `{"server":{"listen_addr":":8080"}}`,
 			dest + " paths --json":   pathsJSON,
 		}, calls: &calls},
-		failKeys: []string{dest + " secret get -h"},
+		failKeys: []string{dest + " secret set -h"},
 	}
 
 	cfg := Config{
@@ -345,12 +348,12 @@ func TestInstallRoutesSecretsThroughSecretSet(t *testing.T) {
 	dest := filepath.Join(binDir, "nenya")
 
 	var calls []string
-	// The installed binary supports the secret surface (secret get -h exits 0),
+	// The installed binary supports the writer surface (secret set -h exits 0),
 	// so the write must be delegated to `secret set` — nenyactl never writes
 	// the secrets file itself on this path.
 	runner := multiRunner{fallback: scriptRunner{outputs: map[string]string{
 		dest + " example-config": `{"server":{"listen_addr":":8080"}}`,
-		dest + " secret get -h":  "usage: nenya secret get …",
+		dest + " secret set -h":  "usage: nenya secret set …",
 	}, calls: &calls}}
 
 	cfg := Config{
@@ -364,14 +367,60 @@ func TestInstallRoutesSecretsThroughSecretSet(t *testing.T) {
 		t.Fatalf("install: %v", err)
 	}
 
+	want := dest + " secret set --config-dir " + configDir + " --client-token"
 	found := false
 	for _, c := range calls {
-		if c == dest+" secret set --client-token" {
+		if c == want {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("fresh-install token was not routed through nenya secret set; calls:\n%s", strings.Join(calls, "\n"))
+		t.Errorf("fresh-install token was not routed through the pinned single writer; want %q in:\n%s", want, strings.Join(calls, "\n"))
+	}
+}
+
+func TestInstallUserRoutesSecretsThroughSecretSet(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("user install path differs on windows")
+	}
+
+	archive := containTarGz(t, map[string]string{
+		"nenya":                "fake-binary-content",
+		"deploy/nenya.service": "[Unit]\nDescription=nenya",
+		"deploy/nenya.socket":  "[Socket]\nListenStream=8080",
+	})
+	server := releaseServer(t, archive, "v0.0.0-test")
+	defer server.Close()
+	pointAtServer(t, server)
+
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", "")
+
+	var calls []string
+	dest := filepath.Join(tmp, ".local", "bin", "nenya")
+	userRoot := filepath.Join(tmp, ".config", "nenya")
+	runner := multiRunner{fallback: scriptRunner{outputs: map[string]string{
+		dest + " example-config": `{"server":{"listen_addr":":8080"}}`,
+		dest + " secret set -h":  "usage: nenya secret set …",
+	}, calls: &calls}}
+
+	cfg := Config{Version: "v0.0.0-test", UserInstall: true, SkipVerify: true}
+	if err := InstallWithHTTPAndRunner(context.Background(), cfg, server.Client(), runner); err != nil {
+		t.Fatalf("user install: %v", err)
+	}
+
+	// A user install must pin the USER config root: an untargeted writer
+	// would land on (or rotate) the system deployment's token.
+	want := dest + " secret set --config-dir " + userRoot + " --client-token"
+	found := false
+	for _, c := range calls {
+		if c == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("user install did not pin the writer to %s; want %q in:\n%s", userRoot, want, strings.Join(calls, "\n"))
 	}
 }
 
@@ -385,6 +434,9 @@ func (blockingRunner) Output(ctx context.Context, _ string, _ ...string) ([]byte
 }
 
 func TestProbeOutputIsBounded(t *testing.T) {
+	saved := probeTimeout
+	probeTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { probeTimeout = saved })
 	start := time.Now()
 	_, err := probeOutput(context.Background(), blockingRunner{}, "/bin/nenya", "describe", "--json")
 	if err == nil {
@@ -415,6 +467,9 @@ func TestBootstrapConfigContentFallback(t *testing.T) {
 }
 
 func TestQueryNenyaPathsTimesOut(t *testing.T) {
+	saved := probeTimeout
+	probeTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { probeTimeout = saved })
 	if _, ok := queryNenyaPaths(context.Background(), blockingRunner{}, "/bin/nenya"); ok {
 		t.Fatal("a hanging probe must be treated as absent")
 	}
@@ -480,7 +535,7 @@ func TestInstallUserWritesNoSystemUnits(t *testing.T) {
 			outputs: map[string]string{dest + " example-config": `{"server":{"listen_addr":":8080"}}`},
 			calls:   &calls,
 		},
-		failKeys: []string{dest + " secret get -h"},
+		failKeys: []string{dest + " secret set -h"},
 	}
 
 	cfg := Config{Version: "v0.0.0-test", UserInstall: true, SkipVerify: true}

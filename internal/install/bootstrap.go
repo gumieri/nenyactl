@@ -111,7 +111,9 @@ func resolveInstallPaths(ctx context.Context, cfg Config, runner CommandRunner, 
 // probeTimeout bounds feature-detection probes. A released nenya that ignores
 // unknown subcommands would otherwise fall through to server startup and block
 // forever, so every probe is time-bounded and a timeout is treated as "absent".
-const probeTimeout = 5 * time.Second
+// probeTimeout is a var so tests can shrink it instead of sleeping through
+// the real bound.
+var probeTimeout = 5 * time.Second
 
 // probeOutput runs a feature-detection command with a bounded context.
 func probeOutput(ctx context.Context, runner CommandRunner, name string, args ...string) ([]byte, error) {
@@ -188,10 +190,16 @@ func bootstrapSecrets(ctx context.Context, runner CommandRunner, execPath string
 	}
 
 	if secretWriterSupported(ctx, runner, execPath) {
-		if _, err := nenya.New(nenyaRunner{runner: runner, execPath: execPath}).
-			SecretWriterFor(p.secretsDir).
-			SetClientToken(ctx, ""); err != nil {
+		// Pin the install's config root: without it, an untargeted
+		// `secret set` would resolve nenya's §3.3 default (the system root)
+		// and misplace — or rotate — another deployment's token.
+		path, err := nenya.New(nenyaRunner{runner: runner, execPath: execPath}).
+			SetClientTokenInRoot(ctx, p.configDir, "")
+		if err != nil {
 			return false, fmt.Errorf("secret set: %w", err)
+		}
+		if path != "" {
+			fmt.Printf("Wrote client token to %s\n", path)
 		}
 		return true, nil
 	}
@@ -228,13 +236,14 @@ func (n nenyaRunner) Output(ctx context.Context, args ...string) ([]byte, error)
 }
 
 // secretWriterSupported reports whether the installed binary implements the
-// `secret` surface (CONTRACT.md §4.7/§4.8): `secret get -h` prints usage and
+// `secret` writer surface (CONTRACT.md §4.7): `secret set -h` prints usage and
 // exits 0 on a supported binary. Anything else — an unknown command, or a
 // pre-contract binary that treats unknown subcommands as a server start and
 // blocks until the bounded probe fires — means "unsupported", so callers fall
-// back rather than assume.
+// back rather than assume. The probe tests the subcommand actually used for
+// the write, so a binary with the reader but not the writer is unsupported.
 func secretWriterSupported(ctx context.Context, runner CommandRunner, execPath string) bool {
-	_, err := probeOutput(ctx, runner, execPath, "secret", "get", "-h")
+	_, err := probeOutput(ctx, runner, execPath, "secret", "set", "-h")
 	return err == nil
 }
 

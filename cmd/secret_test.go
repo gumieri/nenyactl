@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,7 +135,21 @@ func TestRunSecretBootstrap(t *testing.T) {
 		bootstrapForce = false
 
 		rr := newRecordingRunner()
-		rr.out = []byte(filepath.Join(tmp, "secrets.json"))
+		rr.rec.onCall = func(args []string) {
+			// NOTE: SecretWriterFor snapshots the runner (WithEnv), so state
+			// must be clean between calls: never leave err set here.
+			rr.err = nil
+			switch args[0] {
+			case "paths":
+				rr.err = errors.New("nenya paths: unknown command")
+			case "secret":
+				if args[1] == "get" {
+					rr.out = nil // reader returns nothing; the guard falls back
+					return
+				}
+				rr.out = []byte(filepath.Join(tmp, "secrets.json"))
+			}
+		}
 		dir := fakeContract(t, rr)
 
 		if err := runSecretBootstrap(testCmd(), nil); err != nil {
@@ -144,11 +159,11 @@ func TestRunSecretBootstrap(t *testing.T) {
 			t.Errorf("contract pinned to %q, want %q", *dir, tmp)
 		}
 		if len(rr.rec.calls) != 2 {
-			t.Fatalf("got %d contract calls, want 2 (paths probe + write): %v", len(rr.rec.calls), rr.rec.calls)
+			t.Fatalf("got %d contract calls, want 2 (guard read + write): %v", len(rr.rec.calls), rr.rec.calls)
 		}
-		pathsCall := []string{"paths", "--json", "--config-dir", tmp}
-		if strings.Join(rr.rec.calls[0], " ") != strings.Join(pathsCall, " ") {
-			t.Errorf("paths call = %v, want %v", rr.rec.calls[0], pathsCall)
+		guardCall := []string{"secret", "get", "--client-token", "--config-dir", tmp}
+		if strings.Join(rr.rec.calls[0], " ") != strings.Join(guardCall, " ") {
+			t.Errorf("guard call = %v, want %v", rr.rec.calls[0], guardCall)
 		}
 		want := []string{"secret", "set", "--client-token"}
 		if strings.Join(rr.rec.calls[1], " ") != strings.Join(want, " ") {
@@ -173,9 +188,14 @@ func TestRunSecretBootstrap(t *testing.T) {
 		if err := runSecretBootstrap(testCmd(), nil); err == nil {
 			t.Fatal("expected error for existing token")
 		}
-		// The paths probe runs as part of resolution; the write must not.
-		if len(rr.rec.calls) != 1 || rr.rec.calls[0][0] != "paths" {
-			t.Errorf("calls = %v, want only the paths probe when a token exists", rr.rec.calls)
+		// The contract guard runs during resolution; the write must not.
+		if len(rr.rec.calls) != 1 || rr.rec.calls[0][0] != "secret" {
+			t.Fatalf("calls = %v, want only the guard read when a token exists", rr.rec.calls)
+		}
+		for _, c := range rr.rec.calls {
+			if c[1] == "set" {
+				t.Errorf("bootstrap wrote a token without --force: %v", c)
+			}
 		}
 	})
 
@@ -222,11 +242,8 @@ func TestRunSecretSet(t *testing.T) {
 		t.Errorf("contract pinned to %q, want %q", *dir, tmp)
 	}
 	want := []string{"secret", "set", "--provider", "openai", "sk-test"}
-	if len(rr.rec.calls) != 2 {
-		t.Fatalf("calls = %v, want the paths probe plus one write %v", rr.rec.calls, want)
-	}
-	if strings.Join(rr.rec.calls[1], " ") != strings.Join(want, " ") {
-		t.Errorf("write call = %v, want %v", rr.rec.calls[1], want)
+	if len(rr.rec.calls) != 1 || strings.Join(rr.rec.calls[0], " ") != strings.Join(want, " ") {
+		t.Errorf("calls = %v, want exactly one write %v", rr.rec.calls, want)
 	}
 
 	t.Run("requires --provider", func(t *testing.T) {

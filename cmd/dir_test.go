@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +10,19 @@ import (
 	"github.com/gumieri/nenyactl/internal/detect"
 	"github.com/gumieri/nenyactl/internal/nenya"
 )
+
+// TestMain default-denies host access in path resolution: without it, tests
+// that call resolveDir would spawn a real nenya binary when one is on PATH.
+// Tests that exercise the probe stub pathsProbe themselves (and restore it).
+func TestMain(m *testing.M) {
+	saved := pathsProbe
+	pathsProbe = func(ctx context.Context, dir string) (*nenya.Paths, error) {
+		return nil, errors.New("paths probe disabled in tests")
+	}
+	code := m.Run()
+	pathsProbe = saved
+	os.Exit(code)
+}
 
 func TestResolveDir(t *testing.T) {
 	containerDir := t.TempDir()
@@ -24,7 +38,7 @@ func TestResolveDir(t *testing.T) {
 	}
 
 	t.Run("config root --dir resolves bare-metal paths", func(t *testing.T) {
-		res, err := resolveDir(bareMetalDir, dirAttach, false)
+		res, err := resolveDir(context.Background(), bareMetalDir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -41,7 +55,7 @@ func TestResolveDir(t *testing.T) {
 
 	t.Run("--dir is refined through the paths contract", func(t *testing.T) {
 		saved := pathsProbe
-		pathsProbe = func(dir string) (*nenya.Paths, error) {
+		pathsProbe = func(ctx context.Context, dir string) (*nenya.Paths, error) {
 			if dir != bareMetalDir {
 				t.Errorf("probe dir = %q, want %q", dir, bareMetalDir)
 			}
@@ -55,7 +69,7 @@ func TestResolveDir(t *testing.T) {
 		}
 		t.Cleanup(func() { pathsProbe = saved })
 
-		res, err := resolveDir(bareMetalDir, dirAttach, false)
+		res, err := resolveDir(context.Background(), bareMetalDir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -71,7 +85,7 @@ func TestResolveDir(t *testing.T) {
 	t.Run("empty --dir takes the server-resolved root (honors NENYA_CONFIG_DIR)", func(t *testing.T) {
 		saved := pathsProbe
 		envRoot := filepath.Join(t.TempDir(), "env-root")
-		pathsProbe = func(dir string) (*nenya.Paths, error) {
+		pathsProbe = func(ctx context.Context, dir string) (*nenya.Paths, error) {
 			if dir != "" {
 				t.Errorf("default resolution must not pin a config dir, got %q", dir)
 			}
@@ -84,7 +98,7 @@ func TestResolveDir(t *testing.T) {
 		}
 		t.Cleanup(func() { pathsProbe = saved })
 
-		res, err := resolveDir("", dirAttach, false)
+		res, err := resolveDir(context.Background(), "", dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -98,10 +112,12 @@ func TestResolveDir(t *testing.T) {
 
 	t.Run("a failed probe falls back to the local layout", func(t *testing.T) {
 		saved := pathsProbe
-		pathsProbe = func(dir string) (*nenya.Paths, error) { return nil, errors.New("nenya paths: unknown command") }
+		pathsProbe = func(ctx context.Context, dir string) (*nenya.Paths, error) {
+			return nil, errors.New("nenya paths: unknown command")
+		}
 		t.Cleanup(func() { pathsProbe = saved })
 
-		res, err := resolveDir(bareMetalDir, dirAttach, false)
+		res, err := resolveDir(context.Background(), bareMetalDir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -115,13 +131,13 @@ func TestResolveDir(t *testing.T) {
 
 	t.Run("container roots are never probed", func(t *testing.T) {
 		saved := pathsProbe
-		pathsProbe = func(dir string) (*nenya.Paths, error) {
+		pathsProbe = func(ctx context.Context, dir string) (*nenya.Paths, error) {
 			t.Error("container resolution must not call the contract")
 			return nil, errors.New("should not be called")
 		}
 		t.Cleanup(func() { pathsProbe = saved })
 
-		res, err := resolveDir(containerDir, dirAttach, false)
+		res, err := resolveDir(context.Background(), containerDir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -131,7 +147,7 @@ func TestResolveDir(t *testing.T) {
 	})
 
 	t.Run("container --dir resolves nested config paths", func(t *testing.T) {
-		res, err := resolveDir(containerDir, dirAttach, false)
+		res, err := resolveDir(context.Background(), containerDir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -150,14 +166,14 @@ func TestResolveDir(t *testing.T) {
 	})
 
 	t.Run("attach mode rejects a missing path", func(t *testing.T) {
-		if _, err := resolveDir("/nonexistent/nenyactl/dir", dirAttach, false); err == nil {
+		if _, err := resolveDir(context.Background(), "/nonexistent/nenyactl/dir", dirAttach, false); err == nil {
 			t.Fatal("expected error for missing directory in attach mode")
 		}
 	})
 
 	t.Run("create mode treats a missing --dir as a config root", func(t *testing.T) {
 		missing := filepath.Join(t.TempDir(), "new-config-root")
-		res, err := resolveDir(missing, dirCreate, false)
+		res, err := resolveDir(context.Background(), missing, dirCreate, false)
 		if err != nil {
 			t.Fatalf("create mode should accept a missing path: %v", err)
 		}
@@ -168,7 +184,7 @@ func TestResolveDir(t *testing.T) {
 
 	t.Run("create mode with container default accepts a missing path", func(t *testing.T) {
 		missing := filepath.Join(t.TempDir(), "new-container")
-		res, err := resolveDir(missing, dirCreate, true)
+		res, err := resolveDir(context.Background(), missing, dirCreate, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -180,7 +196,7 @@ func TestResolveDir(t *testing.T) {
 	})
 
 	t.Run("empty --dir defaults to the system config root", func(t *testing.T) {
-		res, err := resolveDir("", dirAttach, false)
+		res, err := resolveDir(context.Background(), "", dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -191,7 +207,7 @@ func TestResolveDir(t *testing.T) {
 
 	t.Run("empty --dir with container default", func(t *testing.T) {
 		t.Setenv("XDG_DATA_HOME", t.TempDir())
-		res, err := resolveDir("", dirAttach, true)
+		res, err := resolveDir(context.Background(), "", dirAttach, true)
 		if err != nil {
 			t.Fatal(err)
 		}
