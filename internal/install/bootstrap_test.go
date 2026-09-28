@@ -190,15 +190,16 @@ func TestBootstrapSecrets(t *testing.T) {
 	})
 
 	t.Run("complements the guard with the local scan when the reader errors", func(t *testing.T) {
-		// Writer supported, reader supported-but-failing, and a local token:
-		// the complement must prevent rotation (no secret set call at all).
+		// Writer supported, reader supported-but-failing, and a local token in
+		// a merge file (NOT the nominal target): the complement must prevent
+		// rotation — the nominal-target stat guard does not fire here.
 		dir := t.TempDir()
 		p := installPaths{
 			configDir:   dir,
 			secretsFile: filepath.Join(dir, "secrets.json"),
 			secretsDir:  dir,
 		}
-		if err := os.WriteFile(p.secretsFile, []byte(`{"client_token":"nk-existing"}`), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "01-client.json"), []byte(`{"client_token":"nk-existing"}`), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		var calls []string
@@ -214,7 +215,10 @@ func TestBootstrapSecrets(t *testing.T) {
 		if err != nil || created {
 			t.Fatalf("created=%v err=%v, want a skipped bootstrap", created, err)
 		}
-		data, _ := os.ReadFile(p.secretsFile)
+		if _, err := os.Stat(p.secretsFile); !os.IsNotExist(err) {
+			t.Errorf("bootstrap wrote %s over an existing merge token: %v", p.secretsFile, err)
+		}
+		data, _ := os.ReadFile(filepath.Join(dir, "01-client.json"))
 		if !strings.Contains(string(data), "nk-existing") {
 			t.Errorf("existing token changed: %q", data)
 		}

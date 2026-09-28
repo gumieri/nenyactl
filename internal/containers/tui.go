@@ -24,8 +24,8 @@ type ProviderDef struct {
 // creates a deployment before a nenya binary exists on the machine, so it
 // cannot call `nenya describe --json` (the authoritative provider catalog,
 // CONTRACT.md §4.3). Callers that do have a binary pass the contract catalog to
-// CollectProviderKeys instead; this list is pruned when the container flow can
-// assume an installed binary.
+// CollectProviderKeysFrom instead; this list is pruned when the container flow
+// can assume an installed binary.
 var BuiltinProviders = []ProviderDef{
 	{Name: "gemini", Help: "Google AI", Auth: "AIza...", NeedsKey: true},
 	{Name: "deepseek", Help: "DeepSeek", Auth: "sk-...", NeedsKey: true},
