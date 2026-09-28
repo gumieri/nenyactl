@@ -205,10 +205,10 @@ func checkSecrets(ctx context.Context, res dirResolution, desc nenya.Description
 	switch {
 	case viaContract:
 		detail = "client token resolves via nenya secret get"
-	case contractErr != nil && haveDesc:
-		// The contract is reachable and its reader ran, yet it did not return
-		// the token the local shim found: a real disagreement about which
-		// source is effective. Distinguish, don't hide.
+	case contractErr != nil:
+		// The reader exists (it was feature-detected) yet did not resolve the
+		// token the local shim found: a real disagreement about which source
+		// is effective. Distinguish, don't hide.
 		return checkResult{Name: "secrets", Status: checkWarn, Detail: "token in " + dir + ", but nenya secret get failed: " + contractErr.Error(), Fix: "reconcile the secrets sources, then re-run `nenyactl doctor`"}
 	}
 

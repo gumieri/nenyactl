@@ -156,18 +156,23 @@ func init() {
 
 // clientToken resolves the deployment's effective client token. Bare-metal
 // reads it through nenya's single reader (`nenya secret get --client-token`,
-// CONTRACT.md §4.8), so the §6.1 source precedence is nenya's, not ours;
-// released binaries without that command fall back to the documented file shim
-// over the deployment's secrets directory. Container deployments read the merge
-// directory the compose file mounts at /run/secrets/nenya. viaContract reports
-// that the token came from the contract rather than the shim; contractErr is
-// the reader's error (unsupported command, or a real failure) for callers that
-// must distinguish "shim found it" from "nenya agreed".
+// CONTRACT.md §4.8) when the binary has that surface, so the §6.1 source
+// precedence is nenya's, not ours; released binaries without it fall back to
+// the documented file shim over the deployment's secrets directory (with no
+// reader-failure stigma — unsupported is not "no token"). Container deployments
+// read the merge directory the compose file mounts at /run/secrets/nenya.
+// viaContract reports that the token came from the contract rather than the
+// shim; contractErr is set only when the reader exists but did not resolve a
+// token, for callers that surface the disagreement.
 func clientToken(ctx context.Context, res dirResolution) (token string, viaContract bool, contractErr error) {
 	if res.Kind == dirContainerRoot {
 		return containers.ClientToken(res.Path), false, nil
 	}
-	tok, err := res.Contract().SecretGet(ctx, "client-token")
+	client := res.Contract()
+	if !client.SecretGetSupported(ctx) {
+		return secrets.ClientTokenInDir(res.Info.SecretsDir()), false, nil
+	}
+	tok, err := client.SecretGet(ctx, "client-token")
 	if err == nil && tok != "" {
 		return tok, true, nil
 	}

@@ -169,6 +169,26 @@ func TestBootstrapSecrets(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects a write that landed outside the config root", func(t *testing.T) {
+		dir := t.TempDir()
+		other := t.TempDir()
+		p := installPaths{configDir: dir, secretsFile: filepath.Join(dir, "secrets.json")}
+		r := scriptRunner{
+			outputs: map[string]string{
+				"/bin/nenya secret set -h": "usage: nenya secret set …",
+				// An ambient NENYA_SECRETS_DIR redirected the write elsewhere.
+				"/bin/nenya secret set --config-dir " + dir + " --client-token": filepath.Join(other, "secrets.json") + "\n",
+			},
+		}
+		created, err := bootstrapSecrets(context.Background(), r, "/bin/nenya", p)
+		if err == nil || created {
+			t.Fatalf("created=%v err=%v, want a surfaced misdirection error", created, err)
+		}
+		if !strings.Contains(err.Error(), other) {
+			t.Errorf("err = %v, want it to name the misdirected path", err)
+		}
+	})
+
 	t.Run("does not rotate existing token", func(t *testing.T) {
 		dir := t.TempDir()
 		p := installPaths{secretsFile: filepath.Join(dir, "secrets.json")}
@@ -352,8 +372,10 @@ func TestInstallRoutesSecretsThroughSecretSet(t *testing.T) {
 	// so the write must be delegated to `secret set` — nenyactl never writes
 	// the secrets file itself on this path.
 	runner := multiRunner{fallback: scriptRunner{outputs: map[string]string{
-		dest + " example-config": `{"server":{"listen_addr":":8080"}}`,
-		dest + " secret set -h":  "usage: nenya secret set …",
+		dest + " example-config":                                           `{"server":{"listen_addr":":8080"}}`,
+		dest + " secret set -h":                                            "usage: nenya secret set …",
+		dest + " secret get --client-token":                                "",
+		dest + " secret set --config-dir " + configDir + " --client-token": filepath.Join(configDir, "secrets.json") + "\n",
 	}, calls: &calls}}
 
 	cfg := Config{
@@ -401,8 +423,10 @@ func TestInstallUserRoutesSecretsThroughSecretSet(t *testing.T) {
 	dest := filepath.Join(tmp, ".local", "bin", "nenya")
 	userRoot := filepath.Join(tmp, ".config", "nenya")
 	runner := multiRunner{fallback: scriptRunner{outputs: map[string]string{
-		dest + " example-config": `{"server":{"listen_addr":":8080"}}`,
-		dest + " secret set -h":  "usage: nenya secret set …",
+		dest + " example-config":                                          `{"server":{"listen_addr":":8080"}}`,
+		dest + " secret set -h":                                           "usage: nenya secret set …",
+		dest + " secret get --client-token":                               "",
+		dest + " secret set --config-dir " + userRoot + " --client-token": filepath.Join(userRoot, "secrets.json") + "\n",
 	}, calls: &calls}}
 
 	cfg := Config{Version: "v0.0.0-test", UserInstall: true, SkipVerify: true}

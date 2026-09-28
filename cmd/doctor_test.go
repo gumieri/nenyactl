@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/gumieri/nenyactl/internal/nenya"
@@ -108,6 +109,40 @@ func TestDiagnoseFailures(t *testing.T) {
 		r := checkSecrets(context.Background(), res, nenya.Description{}, false)
 		if r.Status != checkFail {
 			t.Errorf("got %+v, want fail for the loose file", r)
+		}
+	})
+
+	t.Run("shim token with a working-but-empty reader warns", func(t *testing.T) {
+		// The reader exists (supported probe) and resolves nothing, while the
+		// local shim finds a token: a real disagreement, surfaced as a warning.
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "secrets.json"), []byte(`{"client_token":"nk-x"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		res, err := resolveDir(context.Background(), dir, dirAttach, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		saved := newContractClient
+		rr := newRecordingRunner()
+		rr.rec.onCall = func(args []string) {
+			rr.err = nil
+			if args[0] == "secret" && args[1] == "get" {
+				if len(args) > 2 && args[2] == "-h" {
+					rr.out = []byte("usage: nenya secret get …") // reader exists
+					return
+				}
+				rr.err = errors.New("exit status 1") // reader runs, resolves nothing
+			}
+		}
+		newContractClient = func(d string) *nenya.Client {
+			return nenya.New(rr).WithConfigDir(d)
+		}
+		t.Cleanup(func() { newContractClient = saved })
+
+		r := checkSecrets(context.Background(), res, nenya.Description{}, true)
+		if r.Status != checkWarn || !strings.Contains(r.Detail, "nenya secret get failed") {
+			t.Errorf("got %+v, want a warn naming the reader failure", r)
 		}
 	})
 

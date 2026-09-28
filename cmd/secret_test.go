@@ -158,16 +158,20 @@ func TestRunSecretBootstrap(t *testing.T) {
 		if *dir != tmp {
 			t.Errorf("contract pinned to %q, want %q", *dir, tmp)
 		}
-		if len(rr.rec.calls) != 2 {
-			t.Fatalf("got %d contract calls, want 2 (guard read + write): %v", len(rr.rec.calls), rr.rec.calls)
+		if len(rr.rec.calls) != 3 {
+			t.Fatalf("got %d contract calls, want 3 (support probe, guard read, write): %v", len(rr.rec.calls), rr.rec.calls)
+		}
+		probe := []string{"secret", "get", "-h"}
+		if strings.Join(rr.rec.calls[0], " ") != strings.Join(probe, " ") {
+			t.Errorf("support probe = %v, want %v", rr.rec.calls[0], probe)
 		}
 		guardCall := []string{"secret", "get", "--client-token", "--config-dir", tmp}
-		if strings.Join(rr.rec.calls[0], " ") != strings.Join(guardCall, " ") {
-			t.Errorf("guard call = %v, want %v", rr.rec.calls[0], guardCall)
+		if strings.Join(rr.rec.calls[1], " ") != strings.Join(guardCall, " ") {
+			t.Errorf("guard call = %v, want %v", rr.rec.calls[1], guardCall)
 		}
 		want := []string{"secret", "set", "--client-token"}
-		if strings.Join(rr.rec.calls[1], " ") != strings.Join(want, " ") {
-			t.Errorf("call = %v, want %v", rr.rec.calls[1], want)
+		if strings.Join(rr.rec.calls[2], " ") != strings.Join(want, " ") {
+			t.Errorf("call = %v, want %v", rr.rec.calls[2], want)
 		}
 		if len(rr.rec.env) != 1 || rr.rec.env[0] != "NENYA_SECRETS_DIR="+tmp {
 			t.Errorf("env = %v, want NENYA_SECRETS_DIR=%s", rr.rec.env, tmp)
@@ -188,9 +192,10 @@ func TestRunSecretBootstrap(t *testing.T) {
 		if err := runSecretBootstrap(testCmd(), nil); err == nil {
 			t.Fatal("expected error for existing token")
 		}
-		// The contract guard runs during resolution; the write must not.
-		if len(rr.rec.calls) != 1 || rr.rec.calls[0][0] != "secret" {
-			t.Fatalf("calls = %v, want only the guard read when a token exists", rr.rec.calls)
+		// The support probe and the contract guard run during resolution; the
+		// write must not.
+		if len(rr.rec.calls) != 2 {
+			t.Fatalf("calls = %v, want only the reader probe and guard when a token exists", rr.rec.calls)
 		}
 		for _, c := range rr.rec.calls {
 			if c[1] == "set" {

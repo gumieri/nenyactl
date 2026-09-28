@@ -313,6 +313,17 @@ type SecretWriter struct {
 	dir    string
 }
 
+// SecretGetSupported reports whether the binary implements the secrets reader
+// (CONTRACT.md §4.8): `secret get -h` prints usage and exits 0 on a supported
+// binary. Anything else — an unknown command, or a pre-contract binary that
+// blocks until the bounded probe fires — means "unsupported", so callers fall
+// back to their documented file shim instead of treating the failure as
+// "no token".
+func (c *Client) SecretGetSupported(ctx context.Context) bool {
+	_, err := c.output(ctx, "secret", "get", "-h")
+	return err == nil
+}
+
 // SetClientTokenInRoot writes the client token through the single writer with
 // the config root selected via --config-dir (CONTRACT.md §4.7): nenya then
 // targets <root>/secrets.json and resolves the secrets sources for that root.
