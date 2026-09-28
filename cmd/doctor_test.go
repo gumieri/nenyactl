@@ -85,6 +85,10 @@ func TestDiagnoseFailures(t *testing.T) {
 
 	t.Run("missing token fails", func(t *testing.T) {
 		dir := t.TempDir()
+		// The reader (if any) resolves nothing: the check must still fail.
+		rr := newRecordingRunner()
+		rr.rec.onCall = func(args []string) { rr.err = nil; rr.out = nil }
+		fakeContract(t, rr)
 		res, err := resolveDir(context.Background(), dir, dirAttach, false)
 		if err != nil {
 			t.Fatal(err)
@@ -96,6 +100,16 @@ func TestDiagnoseFailures(t *testing.T) {
 
 	t.Run("any loose token file fails", func(t *testing.T) {
 		dir := t.TempDir()
+		// Reader unsupported (released binary): the shim finds the token and
+		// the permissions check must still run.
+		rr := newRecordingRunner()
+		rr.rec.onCall = func(args []string) {
+			rr.err = nil
+			if args[0] == "secret" {
+				rr.err = errors.New("nenya secret get: unknown command")
+			}
+		}
+		fakeContract(t, rr)
 		if err := os.WriteFile(filepath.Join(dir, "secrets.json"), []byte(`{"client_token":"nk-x"}`), 0o600); err != nil {
 			t.Fatal(err)
 		}

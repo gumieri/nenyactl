@@ -57,6 +57,13 @@ func runConfigInit(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// bootstrapContentProbe sources the bootstrap config content. Package var so
+// tests can stub the host `nenya example-config` probe; the default delegates
+// to install's feature-detected probe.
+var bootstrapContentProbe = func() []byte {
+	return install.BootstrapConfigContent(context.Background(), install.NewExecRunner(), "nenya")
+}
+
 // bootstrapConfig is the documented bootstrap shim: it writes
 // `<config-root>/config.json` directly because `config init` must work before a
 // nenya binary exists. The content comes from `nenya example-config` when
@@ -74,7 +81,7 @@ func bootstrapConfig(dir string) error {
 		return fmt.Errorf("stat %s: %w", path, err)
 	}
 
-	content := install.BootstrapConfigContent(context.Background(), install.NewExecRunner(), "nenya")
+	content := bootstrapContentProbe()
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}

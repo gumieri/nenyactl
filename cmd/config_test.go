@@ -6,8 +6,18 @@ import (
 	"testing"
 )
 
+// stubBootstrapContent replaces the example-config probe with canned content
+// for the duration of the test, keeping tests hermetic (no host nenya exec).
+func stubBootstrapContent(t *testing.T, content string) {
+	t.Helper()
+	saved := bootstrapContentProbe
+	bootstrapContentProbe = func() []byte { return []byte(content) }
+	t.Cleanup(func() { bootstrapContentProbe = saved })
+}
+
 func TestBootstrapConfig(t *testing.T) {
 	t.Run("creates config directory and files", func(t *testing.T) {
+		stubBootstrapContent(t, `{"server":{"listen_addr":":8080"}}`)
 		tmp := t.TempDir()
 		if err := bootstrapConfig(tmp); err != nil {
 			t.Fatalf("bootstrapConfig() error = %v", err)
@@ -52,6 +62,7 @@ func TestBootstrapConfig(t *testing.T) {
 
 func TestRunConfigInit(t *testing.T) {
 	t.Run("creates config via wrapper", func(t *testing.T) {
+		stubBootstrapContent(t, `{"server":{"listen_addr":":8080"}}`)
 		tmp := t.TempDir()
 		saved := configDir
 		configDir = tmp

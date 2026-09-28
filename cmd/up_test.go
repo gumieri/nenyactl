@@ -96,6 +96,7 @@ func TestUpDeployment(t *testing.T) {
 }
 
 func TestUpDeploymentCreatesMissingConfig(t *testing.T) {
+	stubBootstrapContent(t, `{"server":{"listen_addr":":8080"}}`)
 	base := t.TempDir()
 	res, err := resolveDir(context.Background(), base, dirCreate, false)
 	if err != nil {
