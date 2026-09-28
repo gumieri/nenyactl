@@ -87,7 +87,7 @@ func TestDiagnoseFailures(t *testing.T) {
 		dir := t.TempDir()
 		// The reader (if any) resolves nothing: the check must still fail.
 		rr := newRecordingRunner()
-		rr.rec.onCall = func(args []string) { rr.err = nil; rr.out = nil }
+		rr.rec.onCall = func([]string) { rr.err = nil; rr.out = nil }
 		fakeContract(t, rr)
 		res, err := resolveDir(context.Background(), dir, dirAttach, false)
 		if err != nil {

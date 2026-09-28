@@ -59,7 +59,8 @@ func runConfigInit(cmd *cobra.Command, args []string) error {
 
 // bootstrapContentProbe sources the bootstrap config content. Package var so
 // tests can stub the host `nenya example-config` probe; the default delegates
-// to install's feature-detected probe.
+// to install's feature-detected probe. Mutating it is not safe for parallel
+// tests.
 var bootstrapContentProbe = func() []byte {
 	return install.BootstrapConfigContent(context.Background(), install.NewExecRunner(), "nenya")
 }

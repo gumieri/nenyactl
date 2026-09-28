@@ -129,8 +129,8 @@ func TestRunSecretGenerate(t *testing.T) {
 }
 
 func TestClientTokenShim(t *testing.T) {
-	// Hermetic by default: TestMain disables the paths probe, and the contract
-	// client is stubbed below.
+	// Hermetic by default: TestMain disables the paths probe, and this test
+	// never reaches the contract client (shimToken reads files directly).
 
 	// The shim resolves from the deployment's secrets dir and must IGNORE a
 	// bare `secrets` file: that name belongs to $CREDENTIALS_DIRECTORY
