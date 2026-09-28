@@ -128,6 +128,33 @@ func TestRunSecretGenerate(t *testing.T) {
 	})
 }
 
+func TestClientTokenShim(t *testing.T) {
+	// The shim resolves from the deployment's secrets dir and must IGNORE a
+	// bare `secrets` file: that name belongs to $CREDENTIALS_DIRECTORY
+	// (CONTRACT.md §6.1 source 1), which only the server resolves.
+	dir := t.TempDir()
+	writeFile := func(name, token string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(`{"client_token":"`+token+`"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile("secrets", "nk-credential-dir")
+
+	res, err := resolveDir(context.Background(), dir, dirAttach, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := shimToken(res); got != "" {
+		t.Errorf("shimToken = %q, want empty: a bare `secrets` file is not a deployment secrets file", got)
+	}
+
+	writeFile("01-client.json", "nk-merge")
+	if got := shimToken(res); got != "nk-merge" {
+		t.Errorf("shimToken = %q, want nk-merge from the merge dir", got)
+	}
+}
+
 func TestRunSecretBootstrap(t *testing.T) {
 	t.Run("delegates token creation to the contract", func(t *testing.T) {
 		tmp := t.TempDir()

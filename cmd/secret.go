@@ -171,20 +171,6 @@ var errTokenNotResolved = errors.New("resolved no client token")
 // shim; contractErr is set only when the reader exists but did not resolve a
 // token (an error, or empty success), for callers that surface the
 // disagreement.
-// shimToken resolves the token through the documented file shim: the
-// name-ordered *.json merge over the deployment's secrets directory, plus the
-// legacy single files (secrets.json, secrets) ExistingTokenFile recognizes.
-func shimToken(res dirResolution) string {
-	dir := res.Info.SecretsDir()
-	if tok := secrets.ClientTokenInDir(dir); tok != "" {
-		return tok
-	}
-	if p := secrets.ExistingTokenFile(dir); p != "" {
-		return secrets.ClientTokenInFile(p)
-	}
-	return ""
-}
-
 func clientToken(ctx context.Context, res dirResolution) (token string, viaContract bool, contractErr error) {
 	if res.Kind == dirContainerRoot {
 		return containers.ClientToken(res.Path), false, nil
@@ -201,6 +187,16 @@ func clientToken(ctx context.Context, res dirResolution) (token string, viaContr
 		err = errTokenNotResolved
 	}
 	return shimToken(res), false, err
+}
+
+// shimToken resolves the token through the documented file shim: the
+// name-ordered *.json merge over the deployment's secrets directory
+// (ClientTokenInDir). A bare `secrets` file is deliberately NOT consulted —
+// that name belongs to $CREDENTIALS_DIRECTORY (§6.1 source 1), which only the
+// server resolves; reading it here would report a token the gateway does not
+// serve.
+func shimToken(res dirResolution) string {
+	return secrets.ClientTokenInDir(res.Info.SecretsDir())
 }
 
 func runSecretSet(cmd *cobra.Command, args []string) error {
