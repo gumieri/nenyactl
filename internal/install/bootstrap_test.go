@@ -206,8 +206,9 @@ func TestBootstrapSecrets(t *testing.T) {
 		r := scriptRunner{
 			outputs: map[string]string{
 				"/bin/nenya secret set -h": "usage: nenya secret set …",
-				// Reader exists but fails (e.g. an invalid sibling document).
-				"/bin/nenya secret get --client-token --config-dir " + dir: "",
+				// Reader exists (-h succeeds) but fails on the read (e.g. an
+				// invalid sibling document): unmapped key → error.
+				"/bin/nenya secret get -h": "usage: nenya secret get …",
 			},
 			calls: &calls,
 		}
