@@ -72,7 +72,7 @@ func runAgents(cmd *cobra.Command, args []string) error {
 
 	desc, err := client.Describe(cmd.Context())
 	if err != nil {
-		return fmt.Errorf("agents requires `nenya describe --json` (contract target): %w", err)
+		return fmt.Errorf("agents requires `nenya describe --json` (nenya v0.16.0 or newer): %w", err)
 	}
 	catalog := agents.CatalogFromDescribe(catalogModels(desc.Providers.Catalog))
 	if len(catalog.Models) == 0 {

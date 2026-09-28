@@ -149,8 +149,9 @@ nenyactl secret generate --type apikey --name my-app
 ```
 
 > **Config layout caveat.** On released nenya ≤ 0.15, creating any
-> `config.d/*.json` makes it ignore `config.json` entirely. On `main`,
-> `config.json` is the base and `config.d/*.json` layer over it. Treat
+> `config.d/*.json` makes it ignore `config.json` entirely. As of nenya
+> **v0.16.0**, `config.json` is the base and `config.d/*.json` layer over it
+> (later filename wins), and every field merges structurally. Treat
 > `nenya describe` as the authority on what is in effect.
 
 ### Connect a Client

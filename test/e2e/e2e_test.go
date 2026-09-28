@@ -243,7 +243,7 @@ func assertContractVersion(ctx context.Context, t *testing.T, binPath, configDir
 	cmd.Env = append(os.Environ(), "NENYA_SECRETS_DIR="+configDir)
 	out, err := cmd.Output()
 	if err != nil {
-		t.Logf("describe --json not available yet (contract target): %v", err)
+		t.Logf("describe --json not available (nenya older than v0.16.0): %v", err)
 		return
 	}
 	var described struct {
