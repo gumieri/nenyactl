@@ -372,9 +372,9 @@ func TestInstallRoutesSecretsThroughSecretSet(t *testing.T) {
 	// so the write must be delegated to `secret set` — nenyactl never writes
 	// the secrets file itself on this path.
 	runner := multiRunner{fallback: scriptRunner{outputs: map[string]string{
-		dest + " example-config":                                           `{"server":{"listen_addr":":8080"}}`,
-		dest + " secret set -h":                                            "usage: nenya secret set …",
-		dest + " secret get --client-token":                                "",
+		dest + " example-config": `{"server":{"listen_addr":":8080"}}`,
+		dest + " secret set -h":  "usage: nenya secret set …",
+		dest + " secret get --client-token --config-dir " + configDir + "": "",
 		dest + " secret set --config-dir " + configDir + " --client-token": filepath.Join(configDir, "secrets.json") + "\n",
 	}, calls: &calls}}
 
@@ -423,9 +423,9 @@ func TestInstallUserRoutesSecretsThroughSecretSet(t *testing.T) {
 	dest := filepath.Join(tmp, ".local", "bin", "nenya")
 	userRoot := filepath.Join(tmp, ".config", "nenya")
 	runner := multiRunner{fallback: scriptRunner{outputs: map[string]string{
-		dest + " example-config":                                          `{"server":{"listen_addr":":8080"}}`,
-		dest + " secret set -h":                                           "usage: nenya secret set …",
-		dest + " secret get --client-token":                               "",
+		dest + " example-config": `{"server":{"listen_addr":":8080"}}`,
+		dest + " secret set -h":  "usage: nenya secret set …",
+		dest + " secret get --client-token --config-dir " + userRoot + "": "",
 		dest + " secret set --config-dir " + userRoot + " --client-token": filepath.Join(userRoot, "secrets.json") + "\n",
 	}, calls: &calls}}
 

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/gumieri/nenyactl/internal/containers"
@@ -154,6 +155,11 @@ func init() {
 	secretSetCmd.Flags().StringVar(&secretSetProvider, "provider", "", "Provider name whose key is set (required)")
 }
 
+// errTokenNotResolved marks a supported reader that ran but resolved no
+// token (empty stdout, exit 0) — a shim/reader disagreement for callers
+// that surface it.
+var errTokenNotResolved = errors.New("resolved no client token")
+
 // clientToken resolves the deployment's effective client token. Bare-metal
 // reads it through nenya's single reader (`nenya secret get --client-token`,
 // CONTRACT.md §4.8) when the binary has that surface, so the §6.1 source
@@ -163,7 +169,8 @@ func init() {
 // read the merge directory the compose file mounts at /run/secrets/nenya.
 // viaContract reports that the token came from the contract rather than the
 // shim; contractErr is set only when the reader exists but did not resolve a
-// token, for callers that surface the disagreement.
+// token (an error, or empty success), for callers that surface the
+// disagreement.
 func clientToken(ctx context.Context, res dirResolution) (token string, viaContract bool, contractErr error) {
 	if res.Kind == dirContainerRoot {
 		return containers.ClientToken(res.Path), false, nil
@@ -175,6 +182,9 @@ func clientToken(ctx context.Context, res dirResolution) (token string, viaContr
 	tok, err := client.SecretGet(ctx, "client-token")
 	if err == nil && tok != "" {
 		return tok, true, nil
+	}
+	if err == nil {
+		err = errTokenNotResolved
 	}
 	return secrets.ClientTokenInDir(res.Info.SecretsDir()), false, err
 }

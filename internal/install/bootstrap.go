@@ -187,16 +187,23 @@ func bootstrapSecrets(ctx context.Context, runner CommandRunner, execPath string
 	}
 
 	if secretWriterSupported(ctx, runner, execPath) {
-		client := nenya.New(nenyaRunner{runner: runner, execPath: execPath})
-		// The reader sees credential-dir and env sources a local scan cannot;
-		// if it resolves a token, this install must not create (or shadow) one.
-		if tok, err := client.SecretGet(ctx, "client-token"); err == nil && tok != "" {
-			fmt.Fprintf(os.Stderr, "Warning: the deployment already resolves a client token; not creating %s.\n", p.secretsFile)
+		// Pin the install's config root for BOTH the guard and the write: an
+		// unpinned call would resolve nenya's §3.3 default (the system root)
+		// and inspect — or rotate — another deployment's token.
+		client := nenya.New(nenyaRunner{runner: runner, execPath: execPath}).WithConfigDir(p.configDir)
+		if client.SecretGetSupported(ctx) {
+			// The reader sees credential-dir and env sources a local scan
+			// cannot; if it resolves a token, this install must not create
+			// (or shadow) one.
+			if tok, err := client.SecretGet(ctx, "client-token"); err == nil && tok != "" {
+				fmt.Fprintf(os.Stderr, "Warning: the deployment already resolves a client token; not creating %s.\n", p.secretsFile)
+				return false, nil
+			}
+		} else if found := secrets.ExistingTokenFile(p.secretsDir); found != "" {
+			// Writer without reader: complement with the local scan.
+			fmt.Fprintf(os.Stderr, "Warning: a client token already exists in %s; not creating %s.\n", found, p.secretsFile)
 			return false, nil
 		}
-		// Pin the install's config root: an untargeted `secret set` would
-		// resolve nenya's §3.3 default (the system root) and misplace — or
-		// rotate — another deployment's token.
 		path, err := client.SetClientTokenInRoot(ctx, p.configDir, "")
 		if err != nil {
 			return false, fmt.Errorf("secret set: %w", err)
