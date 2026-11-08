@@ -17,11 +17,11 @@ owns the invocation and experience, consuming nenya's contract.
 
 ## Installation
 
-> **Status: pre-release.** nenyactl has no published release yet, so there are
-> no tarballs and no package-manager channels. The commands below are the ones
-> that will work once the first release ships; until then, build from source.
+> **Status: v0.1.0.** Binary tarballs, deb/rpm/pkg packages, and Homebrew are
+> published; AUR and Nix channels are planned (the goreleaser publishers are
+> configured but their target repos/channels are not set up yet).
 
-### From Source (works today)
+### From Source
 
 ```bash
 git clone https://github.com/gumieri/nenyactl
@@ -30,7 +30,7 @@ go build -o nenyactl ./cmd/nenyactl/
 install -m 755 nenyactl /usr/local/bin/   # or ~/.local/bin
 ```
 
-### Binary tarball (Linux / macOS) — after first release
+### Binary tarball (Linux / macOS)
 
 ```bash
 # Linux amd64
@@ -42,25 +42,20 @@ curl -fsSL https://github.com/gumieri/nenyactl/releases/latest/download/nenyactl
 sudo install -m 755 nenyactl /usr/bin/
 ```
 
-### Homebrew (macOS / Linux) — after first release
+### Homebrew (macOS / Linux)
 
 ```bash
 brew install gumieri/tap/nenyactl
 ```
 
-### Arch Linux (AUR) — after first release
+> The tap fills on the next tagged release; if the formula is not there yet,
+> use the tarball above.
 
-```bash
-yay -S nenyactl-bin
-```
+### Arch Linux (AUR) — planned
 
-### Nix / NixOS — after first release
+### Nix / NixOS — planned
 
-```bash
-nix-env -iA nur.repos.gumieri.nenyactl
-```
-
-### System packages (Linux) — after first release
+### System packages (Linux)
 
 ```bash
 # Debian / Ubuntu

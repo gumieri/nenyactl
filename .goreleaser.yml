@@ -54,30 +54,6 @@ nfpms:
     homepage: https://github.com/gumieri/nenyactl
     license: MIT
 
-aurs:
-  - name: nenyactl-bin
-    description: CLI tool for managing the Nenya AI API Gateway.
-    homepage: https://github.com/gumieri/nenyactl
-    license: MIT
-    provides:
-      - nenyactl
-    conflicts:
-      - nenyactl
-    git_url: ssh://aur@aur.archlinux.org/nenyactl-bin.git
-    private_key: "{{ .Env.AUR_KEY }}"
-    package: |
-      install -Dm755 "./nenyactl" "${pkgdir}/usr/bin/nenyactl"
-
-nix:
-  - name: nenyactl
-    description: CLI tool for managing the Nenya AI API Gateway.
-    homepage: https://github.com/gumieri/nenyactl
-    license: mit
-    repository:
-      owner: gumieri
-      name: nur-packages
-      branch: main
-
 brews:
   - name: nenyactl
     repository:
