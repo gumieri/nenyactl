@@ -24,6 +24,20 @@ const (
 	screenKeys
 	screenEdit
 	screenAgents
+	// screenConfirmDelete gates a destructive operation (agent or entry
+	// removal) behind an explicit y/n (NCTL-44).
+	screenConfirmDelete
+	// screenReview shows the full pending change set before anything is
+	// written; save only happens from here (NCTL-44).
+	screenReview
+)
+
+// confirmKind distinguishes what a pending confirmation would remove.
+type confirmKind int
+
+const (
+	confirmDeleteAgent confirmKind = iota
+	confirmDeleteEntry
 )
 
 type sectionInfo struct {
@@ -74,6 +88,13 @@ type configModel struct {
 	agentsView    viewport.Model
 	width, height int
 	helpModel     help.Model
+
+	// confirm state: which screen to return to and what would be removed.
+	confirmKind  confirmKind
+	confirmIndex int
+	// reviewFrom is the screen the save was requested from, so esc returns
+	// the user to their editing context.
+	reviewFrom configScreen
 
 	saved bool
 	quit  bool
@@ -214,6 +235,10 @@ func (m configModel) helpKeyMap() tui.KeyMap {
 		return tui.KeysKeyMap
 	case screenEdit:
 		return tui.ValueEditKeyMap
+	case screenConfirmDelete:
+		return tui.ConfirmKeyMap
+	case screenReview:
+		return tui.ReviewKeyMap
 	default:
 		return tui.SectionsKeyMap
 	}
@@ -244,6 +269,10 @@ func (m *configModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateEdit(msg)
 		case screenAgents:
 			return m.updateAgents(msg)
+		case screenConfirmDelete:
+			return m.updateConfirmDelete(msg)
+		case screenReview:
+			return m.updateReview(msg)
 		}
 	}
 
@@ -277,8 +306,8 @@ func (m *configModel) updateSections(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "s":
-		m.saved = true
-		return m, tea.Quit
+		m.beginReview()
+		return m, nil
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
@@ -293,6 +322,13 @@ func (m *configModel) updateSections(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// beginReview moves to the save-review screen, remembering where the user
+// came from (NCTL-44: save shows what will change before writing).
+func (m *configModel) beginReview() {
+	m.reviewFrom = m.screen
+	m.screen = screenReview
 }
 
 func (m *configModel) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -339,8 +375,8 @@ func (m *configModel) updateAgentsGlobal(key string) (tea.Model, tea.Cmd, bool) 
 		m.scrollSections()
 		return m, nil, true
 	case "s":
-		m.saved = true
-		return m, tea.Quit, true
+		m.beginReview()
+		return m, nil, true
 	}
 	return m, nil, false
 }
@@ -362,16 +398,61 @@ func (m *configModel) updateAgentsAction(key string) (tea.Model, tea.Cmd, bool) 
 		return m, nil, true
 	case "d":
 		if m.agentCursor >= 0 && m.agentCursor < len(m.agents) {
-			m.agents = append(m.agents[:m.agentCursor], m.agents[m.agentCursor+1:]...)
-			m.agentsDirty = true
-			if m.agentCursor >= len(m.agents) && m.agentCursor > 0 {
-				m.agentCursor--
-			}
-			m.updateAgentsContent()
+			// NCTL-44: gate the destructive delete behind an explicit
+			// confirmation instead of removing the agent silently.
+			m.confirmKind = confirmDeleteAgent
+			m.confirmIndex = m.agentCursor
+			m.screen = screenConfirmDelete
 		}
 		return m, nil, true
 	}
 	return m, nil, false
+}
+
+// updateConfirmDelete resolves a pending destructive-operation confirmation:
+// y performs it, n/esc returns to the originating screen unchanged.
+func (m *configModel) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "enter":
+		switch m.confirmKind {
+		case confirmDeleteAgent:
+			idx := m.confirmIndex
+			if idx >= 0 && idx < len(m.agents) {
+				m.agents = append(m.agents[:idx], m.agents[idx+1:]...)
+				m.agentsDirty = true
+				if m.agentCursor >= len(m.agents) && m.agentCursor > 0 {
+					m.agentCursor--
+				}
+				m.updateAgentsContent()
+			}
+			m.screen = screenAgents
+		case confirmDeleteEntry:
+			m.screen = screenKeys
+		}
+		m.confirmKind = 0
+		m.confirmIndex = -1
+		return m, nil
+	case "n", "esc":
+		m.confirmKind = 0
+		m.confirmIndex = -1
+		m.screen = screenAgents
+		return m, nil
+	}
+	return m, nil
+}
+
+// updateReview resolves the save-review screen: s/enter writes, esc returns
+// to the screen the save was requested from (NCTL-44).
+func (m *configModel) updateReview(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "s", "enter":
+		m.saved = true
+		return m, tea.Quit
+	case "n", "esc":
+		m.screen = m.reviewFrom
+		return m, nil
+	}
+	return m, nil
 }
 
 // updateAgentsNavigation handles the up/down agent cursor movement.
@@ -475,14 +556,15 @@ func (m *configModel) applyAgentNameEdit() bool {
 	}
 	name := m.editInput.Value()
 	if name == "" {
-		// Remove empty agent
-		m.agents = append(m.agents[:m.agentCursor], m.agents[m.agentCursor+1:]...)
-		if m.agentCursor >= len(m.agents) && m.agentCursor > 0 {
-			m.agentCursor--
-		}
-	} else {
-		m.agents[m.agentCursor].Name = name
+		// NCTL-44: an empty name used to delete the agent silently. Route
+		// through the delete confirmation instead; the actual removal
+		// happens in updateConfirmDelete.
+		m.confirmKind = confirmDeleteAgent
+		m.confirmIndex = m.agentCursor
+		m.screen = screenConfirmDelete
+		return true
 	}
+	m.agents[m.agentCursor].Name = name
 	m.agentsDirty = true
 	m.screen = screenAgents
 	m.updateAgentsContent()
@@ -598,6 +680,10 @@ func (m configModel) View() string {
 		content = m.viewEdit()
 	case screenAgents:
 		content = m.viewAgents()
+	case screenConfirmDelete:
+		content = m.viewConfirmDelete(theme)
+	case screenReview:
+		content = m.viewReview(theme)
 	}
 
 	helpView := m.helpModel.View(m.helpKeyMap())
@@ -681,6 +767,53 @@ func (m configModel) viewEdit() string {
 		Padding(1, 2)
 
 	return baseStyle.Render(body)
+}
+
+// viewConfirmDelete renders the destructive-operation gate: what would be
+// removed and the y/n choice (NCTL-44).
+func (m configModel) viewConfirmDelete(theme tui.Theme) string {
+	subject := "this entry"
+	switch m.confirmKind {
+	case confirmDeleteAgent:
+		if m.confirmIndex >= 0 && m.confirmIndex < len(m.agents) {
+			subject = fmt.Sprintf("agent %q", m.agents[m.confirmIndex].Name)
+		} else {
+			subject = "this agent"
+		}
+	}
+	body := theme.Body.Render(fmt.Sprintf(
+		"Delete %s? This cannot be undone within the editor.\n\ny/enter — delete\nn/esc  — cancel",
+		subject,
+	))
+	return lipgloss.NewStyle().Padding(1, 2).Render(body)
+}
+
+// viewReview renders the pending change set before anything is written
+// (NCTL-44): every dotted key with its new value, plus the agents note.
+func (m configModel) viewReview(theme tui.Theme) string {
+	var b strings.Builder
+	b.WriteString(theme.Title.Render("Review changes"))
+	b.WriteString("\n\n")
+
+	if len(m.changes) == 0 && !m.agentsDirty {
+		b.WriteString(theme.Body.Render("No changes to save."))
+	}
+
+	if m.agentsDirty {
+		b.WriteString(theme.Body.Render("• agents: rewritten per the edited list\n"))
+	}
+	keys := make([]string, 0, len(m.changes))
+	for k := range m.changes {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Fprintf(&b, "%s %s = %s\n", theme.Dimmed.Render("•"), theme.Body.Render(k), m.changes[k])
+	}
+
+	b.WriteString("\n")
+	b.WriteString(theme.Body.Render("s/enter — save and apply\nn/esc  — back to editing"))
+	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
 }
 
 func (m configModel) viewAgents() string {

@@ -105,3 +105,10 @@ var PickerKeyMap = KeyMap{
 	Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 	Toggle: key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
 }
+
+// ReviewKeyMap is the save-review screen shown before changes are written:
+// confirm to save, cancel to return to editing (NCTL-44).
+var ReviewKeyMap = KeyMap{
+	Select: key.NewBinding(key.WithKeys("s", "enter"), key.WithHelp("s/enter", "save")),
+	Back:   key.NewBinding(key.WithKeys("n", "esc"), key.WithHelp("n/esc", "back")),
+}

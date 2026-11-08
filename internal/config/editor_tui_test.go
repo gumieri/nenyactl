@@ -134,11 +134,35 @@ func TestEditorTUI_EnterSection(t *testing.T) {
 func TestEditorTUI_Save(t *testing.T) {
 	cfg := `{"server": {"listen_addr": ":8080"}}`
 
-	t.Run("s key saves and quits", func(t *testing.T) {
+	t.Run("s key opens the review screen", func(t *testing.T) {
 		m := setupModel(t, cfg)
+		update(&m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+		if m.screen != screenReview {
+			t.Fatalf("screen = %v, want screenReview (NCTL-44: save goes through review)", m.screen)
+		}
+		if m.reviewFrom != screenSections {
+			t.Errorf("reviewFrom = %v, want screenSections", m.reviewFrom)
+		}
+	})
+
+	t.Run("review s saves and quits", func(t *testing.T) {
+		m := setupModel(t, cfg)
+		m.beginReview()
 		updated := update(&m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
 		if !updated.saved {
 			t.Error("expected saved flag to be set")
+		}
+	})
+
+	t.Run("review esc returns to the originating screen without saving", func(t *testing.T) {
+		m := setupModel(t, cfg)
+		m.beginReview()
+		updated := update(&m, tea.KeyMsg{Type: tea.KeyEsc})
+		if updated.saved {
+			t.Error("esc on review must not save")
+		}
+		if updated.screen != screenSections {
+			t.Errorf("screen = %v, want screenSections", updated.screen)
 		}
 	})
 }
@@ -236,6 +260,76 @@ func TestEditorTUI_AgentsScreenNavigation(t *testing.T) {
 		update(&m, tea.KeyMsg{Type: tea.KeyEsc})
 		if m.screen != screenSections {
 			t.Errorf("screen = %d, want %d", m.screen, screenSections)
+		}
+	})
+}
+
+func TestEditorTUI_DeleteConfirm(t *testing.T) {
+	cfg := `{"agents": {"mode": "manual"}}`
+
+	seed := func(t *testing.T) *configModel {
+		m := setupModel(t, cfg)
+		m.screen = screenAgents
+		m.agents = []agentEntry{{Name: "alpha", Strategy: "fallback"}, {Name: "beta", Strategy: "fallback"}}
+		m.agentCursor = 0
+		return &m
+	}
+
+	t.Run("d opens the delete confirmation, agent intact", func(t *testing.T) {
+		m := seed(t)
+		update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+		if m.screen != screenConfirmDelete {
+			t.Fatalf("screen = %v, want screenConfirmDelete", m.screen)
+		}
+		if m.confirmKind != confirmDeleteAgent || m.confirmIndex != 0 {
+			t.Errorf("confirm state = %v/%d, want agent/0", m.confirmKind, m.confirmIndex)
+		}
+		if len(m.agents) != 2 {
+			t.Errorf("agents = %d, want 2 (delete must not apply before confirmation)", len(m.agents))
+		}
+	})
+
+	t.Run("y confirms the delete", func(t *testing.T) {
+		m := seed(t)
+		update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+		update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+		if len(m.agents) != 1 {
+			t.Fatalf("agents = %d, want 1", len(m.agents))
+		}
+		if m.agents[0].Name != "beta" {
+			t.Errorf("remaining agent = %q, want beta", m.agents[0].Name)
+		}
+		if m.screen != screenAgents {
+			t.Errorf("screen = %v, want screenAgents", m.screen)
+		}
+	})
+
+	t.Run("n cancels the delete", func(t *testing.T) {
+		m := seed(t)
+		update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+		update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+		if len(m.agents) != 2 {
+			t.Fatalf("agents = %d, want 2 (cancel preserves the list)", len(m.agents))
+		}
+		if m.screen != screenAgents {
+			t.Errorf("screen = %v, want screenAgents", m.screen)
+		}
+	})
+
+	t.Run("empty agent name routes to delete confirmation instead of silent removal", func(t *testing.T) {
+		m := seed(t)
+		m.editKey = "agent_name"
+		m.editInput.SetValue("")
+		m.applyEdit()
+		if m.screen != screenConfirmDelete {
+			t.Fatalf("screen = %v, want screenConfirmDelete (NCTL-44: no silent deletes)", m.screen)
+		}
+		if len(m.agents) != 2 {
+			t.Fatalf("agents = %d, want 2 (removal must wait for confirmation)", len(m.agents))
+		}
+		update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+		if len(m.agents) != 1 {
+			t.Fatalf("agents = %d, want 1 after confirmed removal", len(m.agents))
 		}
 	})
 }
