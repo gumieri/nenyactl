@@ -333,3 +333,79 @@ func TestEditorTUI_DeleteConfirm(t *testing.T) {
 		}
 	})
 }
+
+func TestEditorTUI_RevertAndDiscard(t *testing.T) {
+	cfg := `{"server": {"listen_addr": ":8080"}}`
+
+	setupKeys := func(t *testing.T) *configModel {
+		m := setupModel(t, cfg)
+		m.loadSection("server")
+		m.screen = screenKeys
+		return &m
+	}
+
+	t.Run("u reverts an edited entry to its pre-edit value", func(t *testing.T) {
+		m := setupKeys(t)
+		m.cursor = 0
+		m.editInput.SetValue(":9999")
+		m.applyEdit()
+		if m.changes["server.listen_addr"] != `":9999"` {
+			t.Fatalf("change not recorded: %v", m.changes)
+		}
+		update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+		if _, pending := m.changes["server.listen_addr"]; pending {
+			t.Error("change should be dropped after revert")
+		}
+	})
+
+	t.Run("u on an unedited entry is a no-op", func(t *testing.T) {
+		m := setupKeys(t)
+		m.cursor = 1
+		update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+		if len(m.changes) != 0 {
+			t.Errorf("changes = %v, want none", m.changes)
+		}
+	})
+
+	t.Run("discard-all from review clears changes and restores values", func(t *testing.T) {
+		m := setupKeys(t)
+		m.cursor = 0
+		m.editInput.SetValue(":9999")
+		m.applyEdit()
+		m.beginReview()
+		update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("D")})
+		if m.screen != screenConfirmDelete || m.confirmKind != confirmDiscardAll {
+			t.Fatalf("screen/kind = %v/%v, want confirmDelete/discardAll", m.screen, m.confirmKind)
+		}
+		update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+		if len(m.changes) != 0 {
+			t.Errorf("changes = %v, want cleared", m.changes)
+		}
+		if m.screen != screenKeys {
+			t.Errorf("screen = %v, want screenKeys (review origin)", m.screen)
+		}
+	})
+}
+
+func TestEditorTUI_DiscardCancel(t *testing.T) {
+	cfg := `{"server": {"listen_addr": ":8080"}}`
+
+	m := setupModel(t, cfg)
+	m.loadSection("server")
+	m.screen = screenKeys
+	m.cursor = 0
+	m.editInput.SetValue(":9999")
+	m.applyEdit()
+	m.beginReview()
+	update(&m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("D")})
+	if m.screen != screenConfirmDelete {
+		t.Fatalf("screen = %v, want screenConfirmDelete", m.screen)
+	}
+	update(&m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	if m.screen != screenReview {
+		t.Errorf("screen = %v, want screenReview (cancel returns to the armed screen)", m.screen)
+	}
+	if len(m.changes) != 1 {
+		t.Errorf("changes = %v, want the pending edit preserved on cancel", m.changes)
+	}
+}

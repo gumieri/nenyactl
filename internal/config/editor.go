@@ -38,6 +38,7 @@ type confirmKind int
 const (
 	confirmDeleteAgent confirmKind = iota
 	confirmDeleteEntry
+	confirmDiscardAll
 )
 
 type sectionInfo struct {
@@ -76,6 +77,10 @@ type configModel struct {
 	// never writes a config file itself.
 	changes map[string]string
 
+	// originalValues snapshots pre-edit values by dotted key so single-entry
+	// revert ('u') can restore them (NCTL-46).
+	originalValues map[string]string
+
 	// agents section state
 	agents             []agentEntry
 	agentsModeAuto     bool
@@ -92,6 +97,9 @@ type configModel struct {
 	// confirm state: which screen to return to and what would be removed.
 	confirmKind  confirmKind
 	confirmIndex int
+	// confirmFrom is the screen the confirmation was armed from, so n/esc
+	// returns the user to their editing context.
+	confirmFrom configScreen
 	// reviewFrom is the screen the save was requested from, so esc returns
 	// the user to their editing context.
 	reviewFrom configScreen
@@ -119,16 +127,17 @@ func newConfigModel(cfg *hujson.Value, effective []byte) configModel {
 	}
 
 	m := configModel{
-		screen:       screenSections,
-		config:       cfg,
-		sections:     make([]sectionInfo, len(sections)+extra),
-		cursor:       0,
-		editInput:    textinput.New(),
-		sectionsView: viewport.New(0, 0),
-		keysView:     viewport.New(0, 0),
-		agentsView:   viewport.New(0, 0),
-		helpModel:    tui.NewHelpModel(),
-		changes:      make(map[string]string),
+		screen:         screenSections,
+		config:         cfg,
+		sections:       make([]sectionInfo, len(sections)+extra),
+		cursor:         0,
+		editInput:      textinput.New(),
+		sectionsView:   viewport.New(0, 0),
+		keysView:       viewport.New(0, 0),
+		agentsView:     viewport.New(0, 0),
+		helpModel:      tui.NewHelpModel(),
+		changes:        make(map[string]string),
+		originalValues: make(map[string]string),
 	}
 	m.editInput.CharLimit = 256
 	m.editInput.Width = 50
@@ -347,6 +356,12 @@ func (m *configModel) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.screen = screenEdit
 		}
 		return m, nil
+	case "u":
+		// NCTL-46: revert the entry under the cursor to its pre-edit value.
+		if m.cursor >= 0 && m.cursor < len(m.entries) {
+			m.revertEntry(m.cursor)
+		}
+		return m, nil
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
@@ -361,6 +376,44 @@ func (m *configModel) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// originals snapshots the pre-edit value of every entry the first time it is
+// modified in this session (dotted key -> raw JSON literal). Revert restores
+// from here (NCTL-46).
+func (m *configModel) originals() map[string]string {
+	if m.originalValues == nil {
+		m.originalValues = make(map[string]string)
+	}
+	return m.originalValues
+}
+
+// snapshotEntry records the entry's original value before its first edit.
+func (m *configModel) snapshotEntry(dottedKey string, value string) {
+	if _, exists := m.originals()[dottedKey]; !exists {
+		m.originals()[dottedKey] = value
+	}
+}
+
+// revertEntry restores the entry at idx to its pre-edit value, dropping the
+// pending change. Entries never edited in this session are left alone
+// (NCTL-46).
+func (m *configModel) revertEntry(idx int) {
+	if idx < 0 || idx >= len(m.entries) {
+		return
+	}
+	entry := m.entries[idx]
+	dottedKey := m.activeSection + "." + entry.Key
+	if m.activeScalar && entry.Key == m.activeSection {
+		dottedKey = entry.Key
+	}
+	original, has := m.originals()[dottedKey]
+	if !has {
+		return
+	}
+	entry.Value.Value = parseLiteralValue(original)
+	delete(m.changes, dottedKey)
+	delete(m.originals(), dottedKey)
 }
 
 // updateAgentsGlobal handles quit/save/section-exit keys on the agents screen.
@@ -402,6 +455,7 @@ func (m *configModel) updateAgentsAction(key string) (tea.Model, tea.Cmd, bool) 
 			// confirmation instead of removing the agent silently.
 			m.confirmKind = confirmDeleteAgent
 			m.confirmIndex = m.agentCursor
+			m.confirmFrom = screenAgents
 			m.screen = screenConfirmDelete
 		}
 		return m, nil, true
@@ -428,6 +482,9 @@ func (m *configModel) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.screen = screenAgents
 		case confirmDeleteEntry:
 			m.screen = screenKeys
+		case confirmDiscardAll:
+			m.discardAll()
+			m.screen = m.reviewFrom
 		}
 		m.confirmKind = 0
 		m.confirmIndex = -1
@@ -435,7 +492,7 @@ func (m *configModel) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n", "esc":
 		m.confirmKind = 0
 		m.confirmIndex = -1
-		m.screen = screenAgents
+		m.screen = m.confirmFrom
 		return m, nil
 	}
 	return m, nil
@@ -451,8 +508,40 @@ func (m *configModel) updateReview(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n", "esc":
 		m.screen = m.reviewFrom
 		return m, nil
+	case "D":
+		// NCTL-46: explicit discard-all with confirmation. 'D' only arms the
+		// gate; y performs it.
+		m.confirmKind = confirmDiscardAll
+		m.confirmFrom = screenReview
+		m.screen = screenConfirmDelete
+		return m, nil
 	}
 	return m, nil
+}
+
+// discardAll drops every pending change and restores the pre-edit values
+// (NCTL-46).
+func (m *configModel) discardAll() {
+	for dottedKey, original := range m.originalValues {
+		section, key, found := strings.Cut(dottedKey, ".")
+		if !found {
+			section, key = dottedKey, dottedKey
+		}
+		if section != m.activeSection {
+			continue
+		}
+		for i := range m.entries {
+			if m.entries[i].Key == key {
+				m.entries[i].Value.Value = parseLiteralValue(original)
+				break
+			}
+		}
+	}
+	m.changes = make(map[string]string)
+	m.originalValues = make(map[string]string)
+	m.agents = nil
+	m.agentsDirty = false
+	m.resetCursor()
 }
 
 // updateAgentsNavigation handles the up/down agent cursor movement.
@@ -561,6 +650,7 @@ func (m *configModel) applyAgentNameEdit() bool {
 		// happens in updateConfirmDelete.
 		m.confirmKind = confirmDeleteAgent
 		m.confirmIndex = m.agentCursor
+		m.confirmFrom = screenAgents
 		m.screen = screenConfirmDelete
 		return true
 	}
@@ -591,17 +681,15 @@ func (m *configModel) applyEdit() {
 		return
 	}
 
-	entry.Value.Value = parseLiteralValue(raw)
-
-	// Record the change by dotted key; the caller applies it through nenya's
-	// single writer. nenyactl does not choose the target file or merge. When
-	// the section is a top-level scalar, loadSection keys the single entry by
-	// the section name itself, so the dotted form would double it (foo.foo);
-	// use the bare key in that case.
+	// NCTL-46: snapshot the pre-edit value BEFORE the assignment replaces it,
+	// so 'u' can revert this entry to what it was when the session found it.
 	dottedKey := m.activeSection + "." + entry.Key
 	if m.activeScalar && entry.Key == m.activeSection {
 		dottedKey = entry.Key
 	}
+	m.snapshotEntry(dottedKey, m.entryRawString(entry))
+
+	entry.Value.Value = parseLiteralValue(raw)
 	m.changes[dottedKey] = string(parseLiteralValue(raw))
 }
 
@@ -780,11 +868,14 @@ func (m configModel) viewConfirmDelete(theme tui.Theme) string {
 		} else {
 			subject = "this agent"
 		}
+	case confirmDiscardAll:
+		subject = "ALL pending changes"
 	}
-	body := theme.Body.Render(fmt.Sprintf(
-		"Delete %s? This cannot be undone within the editor.\n\ny/enter — delete\nn/esc  — cancel",
-		subject,
-	))
+	prompt := fmt.Sprintf("Delete %s? This cannot be undone within the editor.\n\ny/enter — delete\nn/esc  — cancel", subject)
+	if m.confirmKind == confirmDiscardAll {
+		prompt = fmt.Sprintf("Discard %s? The config will revert to its pre-edit state.\n\ny/enter — discard\nn/esc  — cancel", subject)
+	}
+	body := theme.Body.Render(prompt)
 	return lipgloss.NewStyle().Padding(1, 2).Render(body)
 }
 
@@ -812,7 +903,7 @@ func (m configModel) viewReview(theme tui.Theme) string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(theme.Body.Render("s/enter — save and apply\nn/esc  — back to editing"))
+	b.WriteString(theme.Body.Render("s/enter — save and apply\nD      — discard all changes (asks)\nn/esc  — back to editing"))
 	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
 }
 
@@ -1141,4 +1232,17 @@ func nonNilStrings(models []string) []string {
 		return []string{}
 	}
 	return models
+}
+
+// entryRawString renders the entry's current raw value as JSON text, for the
+// pre-edit snapshot (NCTL-46).
+func (m *configModel) entryRawString(entry configEntry) string {
+	if lit, ok := entry.Value.Value.(hujson.Literal); ok {
+		return lit.String()
+	}
+	raw, err := json.Marshal(entry.Value.Value)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
 }

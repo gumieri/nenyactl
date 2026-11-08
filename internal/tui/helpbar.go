@@ -63,6 +63,7 @@ var KeysKeyMap = KeyMap{
 	Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
 	Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "edit")),
 	Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
+	Delete: key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "revert")),
 }
 
 // ValueEditKeyMap is the single-field value editor (config keys and agent
@@ -110,5 +111,6 @@ var PickerKeyMap = KeyMap{
 // confirm to save, cancel to return to editing (NCTL-44).
 var ReviewKeyMap = KeyMap{
 	Select: key.NewBinding(key.WithKeys("s", "enter"), key.WithHelp("s/enter", "save")),
+	Delete: key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "discard all")),
 	Back:   key.NewBinding(key.WithKeys("n", "esc"), key.WithHelp("n/esc", "back")),
 }
