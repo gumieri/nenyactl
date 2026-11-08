@@ -158,24 +158,30 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *tuiModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+c", "q":
+// updateListQuit handles the keys that leave the list screen: quit and save.
+func (m *tuiModel) updateListQuit(key string) (tea.Model, tea.Cmd, bool) {
+	switch key {
+	case "ctrl+c", "q", "esc":
 		m.done = true
-		return m, tea.Quit
-	case "esc":
-		m.done = true
-		return m, tea.Quit
+		return m, tea.Quit, true
 	case "s":
 		m.saved = true
-		return m, tea.Quit
+		return m, tea.Quit, true
+	}
+	return m, nil, false
+}
+
+// updateListItem handles the enter/space/d keys: open an editor, toggle the
+// auto-agents mode, or arm the delete confirmation.
+func (m *tuiModel) updateListItem(key string) (tea.Model, tea.Cmd, bool) {
+	switch key {
 	case "enter":
 		if m.cursor < len(m.agents) {
 			m.startEdit(m.cursor)
 		} else {
 			m.startNew()
 		}
-		return m, nil
+		return m, nil, true
 	case " ":
 		if m.cursor == 0 {
 			m.modeAuto = !m.modeAuto
@@ -183,35 +189,54 @@ func (m *tuiModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				// Turning auto on is itself the save; auto-agents need no
 				// custom list.
 				m.saved = true
-				return m, tea.Quit
+				return m, tea.Quit, true
 			}
 			m.loadDefaults()
 		}
-		return m, nil
+		return m, nil, true
 	case "d":
 		if m.cursor > 0 && m.cursor-1 < len(m.agents) {
 			m.screen = screenConfirm
 			m.deleteIdx = m.cursor - 1
 		}
-		return m, nil
+		return m, nil, true
+	case "a":
+		m.startNew()
+		return m, nil, true
+	}
+	return m, nil, false
+}
+
+// updateListNavigation handles the up/down cursor movement on the list.
+func (m *tuiModel) updateListNavigation(key string) (tea.Model, tea.Cmd, bool) {
+	switch key {
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
 			m.scrollAgents()
 		}
-		return m, nil
+		return m, nil, true
 	case "down", "j":
 		total := len(m.agents) + 1
 		if m.cursor < total-1 {
 			m.cursor++
 			m.scrollAgents()
 		}
-		return m, nil
-	case "a":
-		m.startNew()
-		return m, nil
+		return m, nil, true
 	}
-	return m, nil
+	return m, nil, false
+}
+
+func (m *tuiModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	if model, cmd, handled := m.updateListQuit(key); handled {
+		return model, cmd
+	}
+	if model, cmd, handled := m.updateListItem(key); handled {
+		return model, cmd
+	}
+	model, cmd, _ := m.updateListNavigation(key)
+	return model, cmd
 }
 
 func (m *tuiModel) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -268,62 +293,79 @@ func (m *tuiModel) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *tuiModel) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+c":
-		m.done = true
-		return m, tea.Quit
+// updatePickerFilter handles keys with filter-aware behavior: esc/enter leave
+// or commit the filter, "/" focuses it. Returns handled=false when the filter
+// is not focused and the key is not "/".
+func (m *tuiModel) updatePickerFilter(key string) (tea.Model, tea.Cmd, bool) {
+	switch key {
 	case "esc":
 		if m.modelFilter.Focused() {
 			// Esc first leaves the filter, then the picker.
 			m.modelFilter.Blur()
 			m.modelFilter.Reset()
 			m.loadModels()
-			return m, nil
+			return m, nil, true
 		}
 		m.screen = screenEdit
-		return m, nil
+		return m, nil, true
 	case "enter":
 		if m.modelFilter.Focused() {
 			m.modelFilter.Blur()
-			return m, nil
+			return m, nil, true
 		}
 		m.screen = screenEdit
-		return m, nil
-	case " ":
-		if m.modelFilter.Focused() {
-			break
+		return m, nil, true
+	case "/":
+		// "/" focuses the filter; while it is focused it is typed instead.
+		if !m.modelFilter.Focused() {
+			m.modelFilter.Focus()
+			return m, nil, true
 		}
+	}
+	return m, nil, false
+}
+
+// updatePickerBrowse handles the space/up/down model-list keys, which apply
+// only when the filter is not focused.
+func (m *tuiModel) updatePickerBrowse(key string) (tea.Model, tea.Cmd, bool) {
+	if m.modelFilter.Focused() {
+		return m, nil, false
+	}
+	switch key {
+	case " ":
 		if m.modelCursor < len(m.models) {
 			m.models[m.modelCursor].Selected = !m.models[m.modelCursor].Selected
 			m.syncAgentModels()
 			m.updatePickerContent()
 		}
-		return m, nil
+		return m, nil, true
 	case "up", "k":
-		if m.modelFilter.Focused() {
-			break
-		}
 		if m.modelCursor > 0 {
 			m.modelCursor--
 			m.scrollPicker()
 		}
-		return m, nil
+		return m, nil, true
 	case "down", "j":
-		if m.modelFilter.Focused() {
-			break
-		}
 		if m.modelCursor < len(m.models)-1 {
 			m.modelCursor++
 			m.scrollPicker()
 		}
-		return m, nil
-	case "/":
-		// "/" focuses the filter; while it is focused it is typed instead.
-		if !m.modelFilter.Focused() {
-			m.modelFilter.Focus()
-			return m, nil
-		}
+		return m, nil, true
+	}
+	return m, nil, false
+}
+
+func (m *tuiModel) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	if key == "ctrl+c" {
+		m.done = true
+		return m, tea.Quit
+	}
+	if model, cmd, handled := m.updatePickerFilter(key); handled {
+		return model, cmd
+	}
+	if model, cmd, handled := m.updatePickerBrowse(key); handled {
+		return model, cmd
 	}
 
 	// While the filter is focused, forward typed characters to it and

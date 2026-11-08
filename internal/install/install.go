@@ -93,6 +93,190 @@ func ResolveConfigRoot(ctx context.Context, cfg Config, runner CommandRunner, ex
 	return p.configDir, nil
 }
 
+// installResult carries what an install produced for its post-install phase.
+type installResult struct {
+	tag        string
+	dest       string
+	extractDir string
+}
+
+// resolveVersionTag returns the release tag to install: the configured one
+// (normalized, "" rejected) or the latest release fetched over HTTP.
+func resolveVersionTag(ctx context.Context, cfg Config, hc HTTPDoer) (string, error) {
+	tag := normalizeTag(cfg.Version)
+	if tag == "" && cfg.Version != "" {
+		return "", fmt.Errorf("invalid version %q: expected a release tag like v0.15.0", cfg.Version)
+	}
+	if tag == "" {
+		var err error
+		tag, err = FetchLatestVersionWithHTTP(ctx, hc)
+		if err != nil {
+			return "", fmt.Errorf("fetch latest version: %w", err)
+		}
+		tag = normalizeTag(tag)
+	}
+	return tag, nil
+}
+
+// binaryDest returns the install destination for the nenya binary.
+func binaryDest(cfg Config) (string, error) {
+	if cfg.binDirOverride != "" {
+		return filepath.Join(cfg.binDirOverride, "nenya"), nil
+	}
+	if cfg.UserInstall {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("get home dir: %w", err)
+		}
+		return filepath.Join(home, ".local", "bin", "nenya"), nil
+	}
+	return filepath.Join(binDir, "nenya"), nil
+}
+
+// downloadAndExtract fetches the release archive, verifies it, and extracts the
+// nenya binary into a fresh temp dir. The caller owns removing tmpDir.
+func downloadAndExtract(ctx context.Context, cfg Config, hc HTTPDoer, runner CommandRunner, tag string) (string, string, string, error) {
+	archiveName := archiveFilename(tag, runtime.GOOS, runtime.GOARCH)
+
+	tmpDir, err := os.MkdirTemp("", "nenyactl-*")
+	if err != nil {
+		return "", "", "", fmt.Errorf("create temp dir: %w", err)
+	}
+
+	archivePath := filepath.Join(tmpDir, archiveName)
+	if err := downloadWith(ctx, downloadURL(tag), archivePath, hc); err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return "", "", "", fmt.Errorf("download nenya: %w", err)
+	}
+
+	if err := verifyDownload(ctx, cfg, hc, runner, tag, archiveName, archivePath, tmpDir); err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return "", "", "", err
+	}
+
+	extractDir := filepath.Join(tmpDir, "extract")
+	if err := os.MkdirAll(extractDir, 0o755); err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return "", "", "", fmt.Errorf("create extract dir: %w", err)
+	}
+
+	if err := untar(archivePath, extractDir); err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return "", "", "", fmt.Errorf("extract archive: %w", err)
+	}
+
+	// Consumers MUST extract the `nenya` member by exact name (CONTRACT.md §7.1).
+	binaryPath := filepath.Join(extractDir, "nenya")
+	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
+		_ = os.RemoveAll(tmpDir)
+		return "", "", "", fmt.Errorf("nenya binary not found in archive at expected path %s", binaryPath)
+	}
+
+	if err := os.Chmod(binaryPath, 0o755); err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return "", "", "", fmt.Errorf("set executable: %w", err)
+	}
+
+	return tmpDir, extractDir, archiveName, nil
+}
+
+// installBinary places the extracted binary at its destination and verifies the
+// installed contract.
+func installBinary(ctx context.Context, cfg Config, runner CommandRunner, extractDir, tag string) (string, error) {
+	binaryPath := filepath.Join(extractDir, "nenya")
+
+	dest, err := binaryDest(cfg)
+	if err != nil {
+		return "", err
+	}
+
+	parent := filepath.Dir(dest)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return "", fmt.Errorf("create bin dir: %w", err)
+	}
+
+	if err := copyFile(binaryPath, dest, 0o755); err != nil {
+		return "", fmt.Errorf("install binary: %w", err)
+	}
+
+	fmt.Printf("Installed nenya %s to %s\n", tag, dest)
+
+	if err := checkInstalledContract(ctx, runner, dest); err != nil {
+		return "", err
+	}
+	return dest, nil
+}
+
+// installService installs the service units when this is a full (non-user)
+// install, reporting serviceReady.
+func installService(ctx context.Context, runner CommandRunner, res installResult, p installPaths, doService bool) (serviceReady bool) {
+	serviceReady = true
+	if !doService {
+		return serviceReady
+	}
+	generated, err := installServiceUnitsAt(ctx, runner, res.dest, res.extractDir, p.unitDir, p.configDir, p.secretsFile)
+	if err != nil {
+		serviceReady = false
+		fmt.Fprintf(os.Stderr, "Warning: failed to install service files: %v\n", err)
+		fmt.Fprintln(os.Stderr, "You can run nenya directly from the command line.")
+		return serviceReady
+	}
+	warnIfNonDefaultRoot(p, generated)
+	return serviceReady
+}
+
+// bootstrapConfigAndSecrets creates config and secrets when absent, reporting
+// bootstrapReady.
+func bootstrapConfigAndSecrets(ctx context.Context, runner CommandRunner, res installResult, p installPaths, cfg Config) (bootstrapReady bool) {
+	bootstrapReady = true
+	if _, err := bootstrapConfig(ctx, runner, res.dest, p); err != nil {
+		bootstrapReady = false
+		fmt.Fprintf(os.Stderr, "Warning: could not create config: %v\n", err)
+	}
+	if _, err := bootstrapSecrets(ctx, runner, res.dest, p); err != nil {
+		bootstrapReady = false
+		fmt.Fprintf(os.Stderr, "Warning: could not create secrets: %v\n", err)
+	}
+	if cfg.UserInstall && bootstrapReady {
+		fmt.Fprintf(os.Stderr, "User install is not a service. Run it with:\n  NENYA_CONFIG_DIR=%s NENYA_SECRETS_DIR=%s %s\n", p.configDir, p.configDir, res.dest)
+	}
+	return bootstrapReady
+}
+
+// finishBootstrap decides whether the service can be enabled after the units,
+// config, and secrets are in place.
+func finishBootstrap(ctx context.Context, runner CommandRunner, p installPaths, doService, serviceReady, bootstrapReady bool) {
+	switch {
+	case doService && serviceReady && bootstrapReady:
+		enableService(ctx, runner, p.unitDir)
+	case doService && !bootstrapReady:
+		fmt.Fprintln(os.Stderr, "Warning: service not enabled because config/secrets bootstrap failed.")
+	}
+}
+
+// runBootstrap performs the post-install phase: config + secrets bootstrap and
+// (for full installs) the service units and enablement.
+func runBootstrap(ctx context.Context, cfg Config, runner CommandRunner, res installResult) error {
+	// Full installs bootstrap config + secrets so the service can start, then
+	// load/enable the unit. --skip-service keeps this binary-only; --user skips
+	// the service but still bootstraps user config.
+	doService := !cfg.SkipService && !cfg.UserInstall
+	doBootstrap := !cfg.SkipService
+	if !doBootstrap {
+		return nil
+	}
+
+	p, err := resolveInstallPaths(ctx, cfg, runner, res.dest)
+	if err != nil {
+		return err
+	}
+
+	serviceReady := installService(ctx, runner, res, p, doService)
+	bootstrapReady := bootstrapConfigAndSecrets(ctx, runner, res, p, cfg)
+	finishBootstrap(ctx, runner, p, doService, serviceReady, bootstrapReady)
+	return nil
+}
+
 // InstallWithHTTPAndRunner installs nenya, injecting the HTTP client and the
 // command runner used for signature verification and service management.
 func InstallWithHTTPAndRunner(ctx context.Context, cfg Config, hc HTTPDoer, runner CommandRunner) error {
@@ -100,130 +284,30 @@ func InstallWithHTTPAndRunner(ctx context.Context, cfg Config, hc HTTPDoer, runn
 		return fmt.Errorf("bare-metal installation is not supported on Windows; use 'nenyactl containers setup' instead")
 	}
 
-	tag := normalizeTag(cfg.Version)
-	if tag == "" && cfg.Version != "" {
-		return fmt.Errorf("invalid version %q: expected a release tag like v0.15.0", cfg.Version)
-	}
-	if tag == "" {
-		var err error
-		tag, err = FetchLatestVersionWithHTTP(ctx, hc)
-		if err != nil {
-			return fmt.Errorf("fetch latest version: %w", err)
-		}
-		tag = normalizeTag(tag)
-	}
-
-	archiveName := archiveFilename(tag, runtime.GOOS, runtime.GOARCH)
-
-	tmpDir, err := os.MkdirTemp("", "nenyactl-*")
+	tag, err := resolveVersionTag(ctx, cfg, hc)
 	if err != nil {
-		return fmt.Errorf("create temp dir: %w", err)
+		return err
+	}
+
+	tmpDir, extractDir, _, err := downloadAndExtract(ctx, cfg, hc, runner, tag)
+	if err != nil {
+		return err
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
-	archivePath := filepath.Join(tmpDir, archiveName)
-	if err := downloadWith(ctx, downloadURL(tag), archivePath, hc); err != nil {
-		return fmt.Errorf("download nenya: %w", err)
-	}
+	res := installResult{tag: tag, extractDir: extractDir}
 
-	if err := verifyDownload(ctx, cfg, hc, runner, tag, archiveName, archivePath, tmpDir); err != nil {
+	dest, err := installBinary(ctx, cfg, runner, extractDir, tag)
+	if err != nil {
 		return err
 	}
-
-	extractDir := filepath.Join(tmpDir, "extract")
-	if err := os.MkdirAll(extractDir, 0o755); err != nil {
-		return fmt.Errorf("create extract dir: %w", err)
-	}
-
-	if err := untar(archivePath, extractDir); err != nil {
-		return fmt.Errorf("extract archive: %w", err)
-	}
-
-	// Consumers MUST extract the `nenya` member by exact name (CONTRACT.md §7.1).
-	binaryPath := filepath.Join(extractDir, "nenya")
-	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
-		return fmt.Errorf("nenya binary not found in archive at expected path %s", binaryPath)
-	}
-
-	if err := os.Chmod(binaryPath, 0o755); err != nil {
-		return fmt.Errorf("set executable: %w", err)
-	}
-
-	dest := filepath.Join(binDir, "nenya")
-	if cfg.binDirOverride != "" {
-		dest = filepath.Join(cfg.binDirOverride, "nenya")
-	} else if cfg.UserInstall {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("get home dir: %w", err)
-		}
-		dest = filepath.Join(home, ".local", "bin", "nenya")
-	}
-
-	parent := filepath.Dir(dest)
-	if err := os.MkdirAll(parent, 0o755); err != nil {
-		return fmt.Errorf("create bin dir: %w", err)
-	}
-
-	if err := copyFile(binaryPath, dest, 0o755); err != nil {
-		return fmt.Errorf("install binary: %w", err)
-	}
-
-	fmt.Printf("Installed nenya %s to %s\n", tag, dest)
-
-	if err := checkInstalledContract(ctx, runner, dest); err != nil {
-		return err
-	}
+	res.dest = dest
 
 	if cfg.UserInstall && !cfg.SkipService {
 		fmt.Fprintln(os.Stderr, "Note: --user installs the binary and user config only; no system service is written.")
 	}
 
-	// Full installs bootstrap config + secrets so the service can start, then
-	// load/enable the unit. --skip-service keeps this binary-only; --user skips
-	// the service but still bootstraps user config.
-	doService := !cfg.SkipService && !cfg.UserInstall
-	doBootstrap := !cfg.SkipService
-	if doBootstrap {
-		p, pathErr := resolveInstallPaths(ctx, cfg, runner, dest)
-		if pathErr != nil {
-			return pathErr
-		}
-
-		serviceReady := true
-		if doService {
-			generated, err := installServiceUnitsAt(ctx, runner, dest, extractDir, p.unitDir, p.configDir, p.secretsFile)
-			if err != nil {
-				serviceReady = false
-				fmt.Fprintf(os.Stderr, "Warning: failed to install service files: %v\n", err)
-				fmt.Fprintln(os.Stderr, "You can run nenya directly from the command line.")
-			} else {
-				warnIfNonDefaultRoot(p, generated)
-			}
-		}
-
-		bootstrapReady := true
-		if _, err := bootstrapConfig(ctx, runner, dest, p); err != nil {
-			bootstrapReady = false
-			fmt.Fprintf(os.Stderr, "Warning: could not create config: %v\n", err)
-		}
-		if _, err := bootstrapSecrets(ctx, runner, dest, p); err != nil {
-			bootstrapReady = false
-			fmt.Fprintf(os.Stderr, "Warning: could not create secrets: %v\n", err)
-		}
-		if cfg.UserInstall && bootstrapReady {
-			fmt.Fprintf(os.Stderr, "User install is not a service. Run it with:\n  NENYA_CONFIG_DIR=%s NENYA_SECRETS_DIR=%s %s\n", p.configDir, p.configDir, dest)
-		}
-
-		switch {
-		case doService && serviceReady && bootstrapReady:
-			enableService(ctx, runner, p.unitDir)
-		case doService && !bootstrapReady:
-			fmt.Fprintln(os.Stderr, "Warning: service not enabled because config/secrets bootstrap failed.")
-		}
-	}
-
-	return nil
+	return runBootstrap(ctx, cfg, runner, res)
 }
 
 // verifyDownload verifies the release before extraction or installation. The

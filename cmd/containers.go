@@ -123,7 +123,7 @@ func runContainerSetupWithExec(ctx context.Context, ex execer, dir, listenAddr s
 
 	fmt.Println(infoStyle.Render("›"), "Setting up Nenya in:", dir)
 
-	if err := containers.Setup(containers.SetupConfig{
+	if err = containers.Setup(containers.SetupConfig{
 		ListenAddr: listenAddr,
 		Dir:        dir,
 	}); err != nil {
@@ -140,7 +140,7 @@ func runContainerSetupWithExec(ctx context.Context, ex execer, dir, listenAddr s
 	if secrets.ExistingTokenFile(secretsDir) != "" {
 		fmt.Println(dimStyle.Render("  ∃"), "Kept existing client token")
 	} else {
-		if _, err := writer.SetClientToken(ctx, ""); err != nil {
+		if _, err = writer.SetClientToken(ctx, ""); err != nil {
 			return fmt.Errorf("generate client token: %w", err)
 		}
 		fmt.Println(successStyle.Render("✓"), "Generated client token")
@@ -154,7 +154,7 @@ func runContainerSetupWithExec(ctx context.Context, ex execer, dir, listenAddr s
 	}
 	keys, err := containers.CollectProviderKeysFrom(providers)
 	if err != nil {
-		fmt.Println(dimStyle.Render("  TUI skipped or cancelled"))
+		fmt.Println(dimStyle.Render("  TUI skipped or canceled"))
 		keys = nil
 	}
 	for _, provider := range sortedStringKeys(keys) {
@@ -294,7 +294,7 @@ func runContainerStatusWithExec(ex execer, dir string) error {
 
 	fmt.Printf("%s Running: %s compose %v\n", infoStyle.Render("›"), runtime, composeArgs)
 	c := ex.Command(string(runtime), composeArgs...).Dir(dir).Stdout(os.Stdout).Stderr(os.Stderr)
-	if err := c.Run(); err != nil {
+	if err = c.Run(); err != nil {
 		return err
 	}
 

@@ -1,0 +1,57 @@
+version: "2"
+
+run:
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - misspell
+    - gocyclo
+    - funlen
+    - nestif
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+    misspell:
+      locale: US
+    gocyclo:
+      min-complexity: 15
+    funlen:
+      lines: 150
+      statements: 80
+    nestif:
+      min-complexity: 4
+  exclusions:
+    paths:
+      - vendor$
+      - third_party$
+    rules:
+      # Test files keep relaxed size/complexity limits but remain subject to
+      # correctness linters (staticcheck, vet, errcheck) and the formatters.
+      - path: ".*_test\\.go"
+        linters:
+          - funlen
+          - gocyclo
+          - nestif
+      # bubbletea Update methods are big key-switch dispatchers by framework
+      # design; the 150/80 ceilings would force artificial splitting of the
+      # switch the library expects. Complexity stays checked (gocyclo).
+      - path: internal/(config/editor|containers/tui)\\.go
+        linters:
+          - funlen
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 5

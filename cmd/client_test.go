@@ -264,7 +264,7 @@ func TestWriteClientConfigMerges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := writeClientConfig(snippet, endpoint); err != nil {
+	if err = writeClientConfig(snippet, endpoint); err != nil {
 		t.Fatalf("writeClientConfig: %v", err)
 	}
 
@@ -273,7 +273,7 @@ func TestWriteClientConfigMerges(t *testing.T) {
 		t.Fatal(err)
 	}
 	var root map[string]any
-	if err := json.Unmarshal(data, &root); err != nil {
+	if err = json.Unmarshal(data, &root); err != nil {
 		t.Fatal(err)
 	}
 	if root["theme"] != "dark" {

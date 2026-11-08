@@ -194,8 +194,8 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case screenSelect:
 			// Command keys (enter/space/quit) are handled here; navigation is
 			// forwarded to the table below.
-			if model, cmd, handled := m.selectKey(msg); handled {
-				return model, cmd
+			if model, selCmd, handled := m.selectKey(msg); handled {
+				return model, selCmd
 			}
 		case screenKeys:
 			return m.updateKeys(msg)

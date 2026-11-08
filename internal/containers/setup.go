@@ -79,19 +79,19 @@ func Setup(cfg SetupConfig) error {
 		return err
 	}
 
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
+	if err = os.MkdirAll(configDir, 0o755); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(secretsDir, 0o700); err != nil {
+	if err = os.MkdirAll(secretsDir, 0o700); err != nil {
 		return err
 	}
 
 	configPath := filepath.Join(configDir, "config.json")
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+	if _, statErr := os.Stat(configPath); os.IsNotExist(statErr) {
 		// Documented shim: container setup cannot assume a nenya binary, so it
 		// writes a minimal config. Collapse with install.BootstrapConfigContent
 		// once `nenya example-config` ships (CONTRACT.md §4.4).
-		if err := os.WriteFile(configPath, []byte(minimalConfig), 0o644); err != nil {
+		if err = os.WriteFile(configPath, []byte(minimalConfig), 0o644); err != nil {
 			return err
 		}
 	}

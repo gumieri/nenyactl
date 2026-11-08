@@ -166,7 +166,7 @@ func MergeOpenCodeProvider(existing []byte, ep Endpoint) ([]byte, bool, error) {
 	}
 
 	var block map[string]any
-	if err := json.Unmarshal([]byte(snippet.Body), &block); err != nil {
+	if err = json.Unmarshal([]byte(snippet.Body), &block); err != nil {
 		return nil, false, fmt.Errorf("parse opencode snippet: %w", err)
 	}
 	providers, ok := block["providers"].(map[string]any)
@@ -182,7 +182,7 @@ func MergeOpenCodeProvider(existing []byte, ep Endpoint) ([]byte, bool, error) {
 	if !ok {
 		return nil, false, fmt.Errorf("existing opencode.json has a non-object \"providers\" value")
 	}
-	if err := jsonc.SetValue(providersObj, "nenya", built); err != nil {
+	if err = jsonc.SetValue(providersObj, "nenya", built); err != nil {
 		return nil, false, err
 	}
 

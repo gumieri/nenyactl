@@ -106,7 +106,7 @@ func (c *Client) output(ctx context.Context, args ...string) ([]byte, error) {
 
 // runBounded executes a contract call under a bounded context. A nil context is
 // normalized so a caller that bypasses cobra cannot panic the process, and a
-// cancelled caller context is surfaced as cancellation rather than as the
+// canceled caller context is surfaced as cancellation rather than as the
 // command's own exit error.
 func runBounded(ctx context.Context, runner Runner, timeout time.Duration, args ...string) ([]byte, error) {
 	if ctx == nil {

@@ -109,11 +109,8 @@ type statusAgents struct {
 	} `json:"agents"`
 }
 
-// buildStatus renders the deployment report. It is separated from the command
-// so it can be tested with a fake contract and health doer.
-func buildStatus(ctx context.Context, res dirResolution, doer healthDoer) string {
-	var b strings.Builder
-
+// statusHeader renders the mode/label header lines of the status report.
+func statusHeader(b *strings.Builder, res dirResolution) {
 	mode := "bare-metal"
 	if res.Kind == dirContainerRoot {
 		mode = "container"
@@ -122,52 +119,75 @@ func buildStatus(ctx context.Context, res dirResolution, doer healthDoer) string
 	if res.Kind == dirContainerRoot {
 		label = "Deployment"
 	}
-	fmt.Fprintf(&b, "Mode:        %s\n", mode)
+	fmt.Fprintf(b, "Mode:        %s\n", mode)
 	pad := strings.Repeat(" ", max(1, 12-len(label)))
-	fmt.Fprintf(&b, "%s:%s%s\n", label, pad, res.Path)
+	fmt.Fprintf(b, "%s:%s%s\n", label, pad, res.Path)
+}
 
+// statusContract describes the deployment and renders the contract/paths/
+// providers block. It returns the description, whether it was obtained, and
+// the contract-resolved config and secrets dirs.
+func statusContract(ctx context.Context, b *strings.Builder, res dirResolution) (nenya.Description, bool, string, string) {
 	// nenya's resolved paths are authoritative once describe succeeds.
-	configDir := res.ConfigDir()
-	secretsDir := res.Info.SecretsDir()
+	cfgDir := res.ConfigDir()
+	secretsLoc := res.Info.SecretsDir()
 	var desc nenya.Description
-	haveDesc := false
-	if d, err := res.Contract().Describe(ctx); err != nil {
-		fmt.Fprintf(&b, "Contract:    unavailable (%v)\n", err)
-	} else {
-		desc, haveDesc = d, true
-		if d.Paths.ConfigDir != "" {
-			configDir = d.Paths.ConfigDir
-		}
-		if d.Paths.SecretsDir != "" {
-			secretsDir = d.Paths.SecretsDir
-		}
-		fmt.Fprintf(&b, "Contract:    v%d\n", d.ContractVersion)
-		if d.Version.Version != "" {
-			fmt.Fprintf(&b, "Nenya:       %s\n", d.Version.Version)
-		}
-		if len(d.Providers.Configured) > 0 {
-			fmt.Fprintf(&b, "Providers:   %s\n", strings.Join(d.Providers.Configured, ", "))
-		}
-		if len(d.Diagnostics) > 0 {
-			fmt.Fprintf(&b, "Diagnostics: %d (run `nenyactl doctor`)\n", len(d.Diagnostics))
-		}
+	d, err := res.Contract().Describe(ctx)
+	if err != nil {
+		fmt.Fprintf(b, "Contract:    unavailable (%v)\n", err)
+		return desc, false, cfgDir, secretsLoc
 	}
-	// The secrets location is the contract's answer, not ours: the effective
-	// source when describe resolved one (it names the winning file or
-	// directory, e.g. the systemd credential), else the preferred file from
-	// paths --json, else the resolved secrets dir.
-	secretsValue := secretsDir
+	desc = d
+	if d.Paths.ConfigDir != "" {
+		cfgDir = d.Paths.ConfigDir
+	}
+	if d.Paths.SecretsDir != "" {
+		secretsLoc = d.Paths.SecretsDir
+	}
+	fmt.Fprintf(b, "Contract:    v%d\n", d.ContractVersion)
+	if d.Version.Version != "" {
+		fmt.Fprintf(b, "Nenya:       %s\n", d.Version.Version)
+	}
+	if len(d.Providers.Configured) > 0 {
+		fmt.Fprintf(b, "Providers:   %s\n", strings.Join(d.Providers.Configured, ", "))
+	}
+	if len(d.Diagnostics) > 0 {
+		fmt.Fprintf(b, "Diagnostics: %d (run `nenyactl doctor`)\n", len(d.Diagnostics))
+	}
+	return desc, true, cfgDir, secretsLoc
+}
+
+// statusSecretsValue picks the effective secrets location: the contract's
+// active source when describe resolved one (it names the winning file or
+// directory, e.g. the systemd credential), else the preferred file from
+// paths --json, else the resolved secrets dir.
+func statusSecretsValue(desc nenya.Description, secretsDir string) string {
+	switch {
+	case desc.Secrets.ActiveSource != "":
+		return desc.Secrets.ActiveSource
+	case desc.Paths.SecretsFile != nil && *desc.Paths.SecretsFile != "":
+		return *desc.Paths.SecretsFile
+	case desc.Paths.SecretsDir != "":
+		return desc.Paths.SecretsDir
+	default:
+		return secretsDir
+	}
+}
+
+// buildStatus renders the deployment report. It is separated from the command
+// so it can be tested with a fake contract and health doer.
+func buildStatus(ctx context.Context, res dirResolution, doer healthDoer) string {
+	var b strings.Builder
+
+	statusHeader(&b, res)
+
+	desc, haveDesc, cfgDir, secretsLoc := statusContract(ctx, &b, res)
+	// The secrets location is the contract's answer, not ours.
+	secretsValue := secretsLoc
 	if haveDesc {
-		switch {
-		case desc.Secrets.ActiveSource != "":
-			secretsValue = desc.Secrets.ActiveSource
-		case desc.Paths.SecretsFile != nil && *desc.Paths.SecretsFile != "":
-			secretsValue = *desc.Paths.SecretsFile
-		case desc.Paths.SecretsDir != "":
-			secretsValue = desc.Paths.SecretsDir
-		}
+		secretsValue = statusSecretsValue(desc, secretsLoc)
 	}
-	fmt.Fprintf(&b, "Config dir:  %s\n", configDir)
+	fmt.Fprintf(&b, "Config dir:  %s\n", cfgDir)
 	fmt.Fprintf(&b, "Secrets:     %s\n", secretsValue)
 	port := statusPort(res, desc, haveDesc)
 	if port == "" {

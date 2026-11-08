@@ -103,8 +103,8 @@ func TestSecretGetReadsValue(t *testing.T) {
 
 	// A provider selector passes --provider; the value is trimmed.
 	fr2 := &fakeRunner{out: []byte("sk-p\n")}
-	if _, err := New(fr2).SecretGet(context.Background(), "anthropic"); err != nil {
-		t.Fatalf("SecretGet(provider): %v", err)
+	if _, provErr := New(fr2).SecretGet(context.Background(), "anthropic"); provErr != nil {
+		t.Fatalf("SecretGet(provider): %v", provErr)
 	}
 	if !equalArgs(fr2.args, []string{"secret", "get", "--provider", "anthropic"}) {
 		t.Errorf("args = %v", fr2.args)

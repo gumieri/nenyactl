@@ -75,10 +75,10 @@ func TestRenderOpenCodeUsesV2Shape(t *testing.T) {
 	if nenya["package"] != "@opencode/ai/providers/openai-compatible" {
 		t.Errorf("package = %v", nenya["package"])
 	}
-	if _, ok := nenya["npm"]; ok {
+	if _, hasNpm := nenya["npm"]; hasNpm {
 		t.Error("V2 provider must not use the V1 `npm` field")
 	}
-	if _, ok := nenya["options"]; ok {
+	if _, hasOptions := nenya["options"]; hasOptions {
 		t.Error("V2 provider must not use the V1 `options` field")
 	}
 	settings, ok := nenya["settings"].(map[string]any)
@@ -126,7 +126,7 @@ func TestMergeOpenCodePreservesUnrelatedKeys(t *testing.T) {
 	if !ok {
 		t.Fatal("merged output has no providers object")
 	}
-	if _, ok := provider["other"]; !ok {
+	if _, hasOther := provider["other"]; !hasOther {
 		t.Error("unrelated provider dropped")
 	}
 	nenya, ok := provider["nenya"].(map[string]any)
@@ -171,7 +171,7 @@ func TestMergeOpenCodeMigratesLegacyV1(t *testing.T) {
 	if !ok {
 		t.Fatal("merged output has no providers object")
 	}
-	if _, ok := providers["nenya"]; !ok {
+	if _, hasNenya := providers["nenya"]; !hasNenya {
 		t.Error("V2 nenya provider not added")
 	}
 	legacy, ok := root["provider"].(map[string]any)
@@ -207,7 +207,7 @@ func TestMergeOpenCodeDropsEmptyLegacyProvider(t *testing.T) {
 	if !ok {
 		t.Fatal("merged output has no providers object")
 	}
-	if _, ok := providers["nenya"]; !ok {
+	if _, hasNenya := providers["nenya"]; !hasNenya {
 		t.Error("V2 nenya provider not added")
 	}
 }

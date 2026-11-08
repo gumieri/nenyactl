@@ -53,6 +53,37 @@ func init() {
 	clientAddCmd.MarkFlagsMutuallyExclusive("write", "output")
 }
 
+// writeSnippetToFile writes the snippet body to --output (mode 0600).
+func writeSnippetToFile(snippet clients.Snippet) error {
+	if err := os.MkdirAll(filepath.Dir(clientOutput), 0o755); err != nil {
+		return fmt.Errorf("create output dir: %w", err)
+	}
+	if err := os.WriteFile(clientOutput, []byte(snippet.Body+"\n"), 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", clientOutput, err)
+	}
+	if err := os.Chmod(clientOutput, 0o600); err != nil {
+		return fmt.Errorf("chmod %s: %w", clientOutput, err)
+	}
+	fmt.Println(successStyle.Render("✓"), "Wrote", clientOutput)
+	return nil
+}
+
+// printSnippet prints the snippet body, redacting the token unless
+// --show-token was passed.
+func printSnippet(snippet clients.Snippet, ep clients.Endpoint) {
+	body := snippet.Body
+	if !clientShowToken {
+		body = redactToken(body, ep.Token)
+	}
+	fmt.Println(dimStyle.Render("  " + snippet.Description))
+	fmt.Println()
+	fmt.Println(body)
+	if !clientShowToken {
+		fmt.Println()
+		fmt.Println(dimStyle.Render("  Token redacted; pass --show-token to print it."))
+	}
+}
+
 func runClientAdd(cmd *cobra.Command, args []string) error {
 	name, err := clients.ParseName(args[0])
 	if err != nil {
@@ -83,29 +114,9 @@ func runClientAdd(cmd *cobra.Command, args []string) error {
 		}
 		return writeClientConfig(snippet, ep)
 	case clientOutput != "":
-		if err := os.MkdirAll(filepath.Dir(clientOutput), 0o755); err != nil {
-			return fmt.Errorf("create output dir: %w", err)
-		}
-		if err := os.WriteFile(clientOutput, []byte(snippet.Body+"\n"), 0o600); err != nil {
-			return fmt.Errorf("write %s: %w", clientOutput, err)
-		}
-		if err := os.Chmod(clientOutput, 0o600); err != nil {
-			return fmt.Errorf("chmod %s: %w", clientOutput, err)
-		}
-		fmt.Println(successStyle.Render("✓"), "Wrote", clientOutput)
-		return nil
+		return writeSnippetToFile(snippet)
 	default:
-		body := snippet.Body
-		if !clientShowToken {
-			body = redactToken(body, ep.Token)
-		}
-		fmt.Println(dimStyle.Render("  " + snippet.Description))
-		fmt.Println()
-		fmt.Println(body)
-		if !clientShowToken {
-			fmt.Println()
-			fmt.Println(dimStyle.Render("  Token redacted; pass --show-token to print it."))
-		}
+		printSnippet(snippet, ep)
 		return nil
 	}
 }

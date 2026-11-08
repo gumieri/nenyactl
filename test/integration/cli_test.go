@@ -91,7 +91,7 @@ func TestConfigInit(t *testing.T) {
 	}
 
 	configPath := filepath.Join(tmp, "config.json")
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+	if _, statErr := os.Stat(configPath); os.IsNotExist(statErr) {
 		t.Error("config.json not created")
 	}
 

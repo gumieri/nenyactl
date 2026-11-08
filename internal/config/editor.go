@@ -327,31 +327,39 @@ func (m *configModel) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *configModel) updateAgents(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+// updateAgentsGlobal handles quit/save/section-exit keys on the agents screen.
+func (m *configModel) updateAgentsGlobal(key string) (tea.Model, tea.Cmd, bool) {
+	switch key {
 	case "ctrl+c", "q":
 		m.quit = true
-		return m, tea.Quit
+		return m, tea.Quit, true
 	case "esc":
 		m.screen = screenSections
 		m.cursor = 0
 		m.scrollSections()
-		return m, nil
+		return m, nil, true
 	case "s":
 		m.saved = true
-		return m, tea.Quit
+		return m, tea.Quit, true
+	}
+	return m, nil, false
+}
+
+// updateAgentsAction handles the enter/a/d/space keys that edit the agent list.
+func (m *configModel) updateAgentsAction(key string) (tea.Model, tea.Cmd, bool) {
+	switch key {
 	case " ":
 		m.agentsModeAuto = !m.agentsModeAuto
 		m.updateAgentsContent()
-		return m, nil
+		return m, nil, true
 	case "enter":
 		m.startEditAgent()
-		return m, nil
+		return m, nil, true
 	case "a":
 		m.agents = append(m.agents, agentEntry{Name: "new-agent", Strategy: "fallback"})
 		m.agentCursor = len(m.agents) - 1
 		m.startEditAgent()
-		return m, nil
+		return m, nil, true
 	case "d":
 		if m.agentCursor >= 0 && m.agentCursor < len(m.agents) {
 			m.agents = append(m.agents[:m.agentCursor], m.agents[m.agentCursor+1:]...)
@@ -361,21 +369,40 @@ func (m *configModel) updateAgents(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.updateAgentsContent()
 		}
-		return m, nil
+		return m, nil, true
+	}
+	return m, nil, false
+}
+
+// updateAgentsNavigation handles the up/down agent cursor movement.
+func (m *configModel) updateAgentsNavigation(key string) (tea.Model, tea.Cmd, bool) {
+	switch key {
 	case "up", "k":
 		if m.agentCursor > 0 {
 			m.agentCursor--
 			m.scrollAgents()
 		}
-		return m, nil
+		return m, nil, true
 	case "down", "j":
 		if m.agentCursor < len(m.agents) {
 			m.agentCursor++
 			m.scrollAgents()
 		}
-		return m, nil
+		return m, nil, true
 	}
-	return m, nil
+	return m, nil, false
+}
+
+func (m *configModel) updateAgents(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	if model, cmd, handled := m.updateAgentsGlobal(key); handled {
+		return model, cmd
+	}
+	if model, cmd, handled := m.updateAgentsAction(key); handled {
+		return model, cmd
+	}
+	model, cmd, _ := m.updateAgentsNavigation(key)
+	return model, cmd
 }
 
 func (m *configModel) loadSection(sectionName string) {
@@ -439,22 +466,32 @@ func (m *configModel) startEdit(idx int) {
 	m.editInput.Focus()
 }
 
+// applyAgentNameEdit applies the edit input to the selected agent's name: an
+// empty value removes the agent. It reports whether the edit was an agent-name
+// edit (the caller then stops processing).
+func (m *configModel) applyAgentNameEdit() bool {
+	if m.editKey != "agent_name" || m.agentCursor < 0 || m.agentCursor >= len(m.agents) {
+		return false
+	}
+	name := m.editInput.Value()
+	if name == "" {
+		// Remove empty agent
+		m.agents = append(m.agents[:m.agentCursor], m.agents[m.agentCursor+1:]...)
+		if m.agentCursor >= len(m.agents) && m.agentCursor > 0 {
+			m.agentCursor--
+		}
+	} else {
+		m.agents[m.agentCursor].Name = name
+	}
+	m.agentsDirty = true
+	m.screen = screenAgents
+	m.updateAgentsContent()
+	return true
+}
+
 func (m *configModel) applyEdit() {
 	// Handle agent name editing
-	if m.editKey == "agent_name" && m.agentCursor >= 0 && m.agentCursor < len(m.agents) {
-		name := m.editInput.Value()
-		if name == "" {
-			// Remove empty agent
-			m.agents = append(m.agents[:m.agentCursor], m.agents[m.agentCursor+1:]...)
-			if m.agentCursor >= len(m.agents) && m.agentCursor > 0 {
-				m.agentCursor--
-			}
-		} else {
-			m.agents[m.agentCursor].Name = name
-		}
-		m.agentsDirty = true
-		m.screen = screenAgents
-		m.updateAgentsContent()
+	if m.applyAgentNameEdit() {
 		return
 	}
 
@@ -680,6 +717,30 @@ func (m configModel) viewAgents() string {
 	return baseStyle.Render(body)
 }
 
+// sectionTypeHint renders the dimmed hint shown after a section name: the
+// agent count for the agents pseudo-section, or the value type/summary.
+func (m configModel) sectionTypeHint(section sectionInfo, theme tui.Theme) string {
+	if section.isAgent {
+		return theme.Dimmed.Render(fmt.Sprintf("  %d agent(s)", len(m.agents)))
+	}
+	field, ok := jsonc.GetField(m.config, section.name)
+	if !ok {
+		return ""
+	}
+	switch field.Value.(type) {
+	case *hujson.Object:
+		return theme.Dimmed.Render("  {object}")
+	case *hujson.Array:
+		return theme.Dimmed.Render("  [array]")
+	default:
+		val := jsonc.FieldValueString(field)
+		if len(val) > 50 {
+			val = val[:47] + "..."
+		}
+		return theme.Dimmed.Render("  " + val)
+	}
+}
+
 func (m configModel) renderSections() string {
 	theme := tui.Current()
 	var lines []string
@@ -694,27 +755,7 @@ func (m configModel) renderSections() string {
 			prefix = "  "
 		}
 
-		typeHint := ""
-		if section.isAgent {
-			count := len(m.agents)
-			typeHint = theme.Dimmed.Render(fmt.Sprintf("  %d agent(s)", count))
-		} else {
-			field, ok := jsonc.GetField(m.config, section.name)
-			if ok {
-				switch field.Value.(type) {
-				case *hujson.Object:
-					typeHint = theme.Dimmed.Render("  {object}")
-				case *hujson.Array:
-					typeHint = theme.Dimmed.Render("  [array]")
-				default:
-					val := jsonc.FieldValueString(field)
-					if len(val) > 50 {
-						val = val[:47] + "..."
-					}
-					typeHint = theme.Dimmed.Render("  " + val)
-				}
-			}
-		}
+		typeHint := m.sectionTypeHint(section, theme)
 
 		nameStyle := theme.Accent
 		if i == m.cursor {

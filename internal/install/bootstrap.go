@@ -78,16 +78,9 @@ func resolveInstallPaths(ctx context.Context, cfg Config, runner CommandRunner, 
 		// unit wires via `LoadCredential=secrets:/etc/nenya/secrets.json`.
 		// Regenerating the unit for another secrets path needs
 		// `nenya service-unit --secrets-file`.
-		if p, ok := queryNenyaPaths(ctx, runner, execPath); ok {
-			if p.ConfigDir != "" {
-				dir = p.ConfigDir
-			}
-			if p.ConfigFile != "" {
-				configFile = p.ConfigFile
-			}
-			if p.SecretsDir != "" {
-				secretsDir = p.SecretsDir
-			}
+		p, ok := queryNenyaPaths(ctx, runner, execPath)
+		if ok {
+			dir, configFile, secretsDir = overlayContractPaths(dir, configFile, secretsDir, p)
 		}
 	}
 	if configFile == "" {
@@ -106,6 +99,22 @@ func resolveInstallPaths(ctx context.Context, cfg Config, runner CommandRunner, 
 		secretsDir:  secretsDir,
 		unitDir:     unitDir,
 	}, nil
+}
+
+// overlayContractPaths applies non-empty fields from a `nenya paths --json`
+// answer onto the locally resolved config root, config file, and secrets dir.
+// The contract answer wins where it speaks; unset fields keep the local value.
+func overlayContractPaths(dir, configFile, secretsDir string, p nenya.Paths) (string, string, string) {
+	if p.ConfigDir != "" {
+		dir = p.ConfigDir
+	}
+	if p.ConfigFile != "" {
+		configFile = p.ConfigFile
+	}
+	if p.SecretsDir != "" {
+		secretsDir = p.SecretsDir
+	}
+	return dir, configFile, secretsDir
 }
 
 // probeTimeout bounds feature-detection probes. A released nenya that ignores
@@ -187,45 +196,70 @@ func bootstrapSecrets(ctx context.Context, runner CommandRunner, execPath string
 	}
 
 	if secretWriterSupported(ctx, runner, execPath) {
-		// Pin the install's config root for BOTH the guard and the write: an
-		// unpinned call would resolve nenya's §3.3 default (the system root)
-		// and inspect — or rotate — another deployment's token.
-		client := nenya.New(nenyaRunner{runner: runner, execPath: execPath}).WithConfigDir(p.configDir)
-		readerResolvedNoToken := false
-		if client.SecretGetSupported(ctx) {
-			// The reader sees credential-dir and env sources a local scan
-			// cannot; if it resolves a token, this install must not create
-			// (or shadow) one.
-			if tok, err := client.SecretGet(ctx, "client-token"); err == nil && tok != "" {
-				fmt.Fprintf(os.Stderr, "Warning: the deployment already resolves a client token; not creating %s.\n", p.secretsFile)
-				return false, nil
-			} else if err == nil {
-				// Clean "no token" from the reader: skip the local scan.
-				readerResolvedNoToken = true
-			}
-		}
-		// The reader did not cleanly resolve "no token" (absent or failed):
-		// complement with the local scan so an existing token is never rotated.
-		if !readerResolvedNoToken {
-			if found := secrets.ExistingTokenFile(p.secretsDir); found != "" {
-				fmt.Fprintf(os.Stderr, "Warning: a client token already exists in %s; not creating %s.\n", found, p.secretsFile)
-				return false, nil
-			}
-		}
-		path, err := client.SetClientTokenInRoot(ctx, p.configDir, "")
-		if err != nil {
-			return false, fmt.Errorf("secret set: %w", err)
-		}
-		if path == "" {
-			return false, fmt.Errorf("secret set wrote the token but reported no target path")
-		}
-		if filepath.Clean(path) != filepath.Clean(p.secretsFile) {
-			return false, fmt.Errorf("secret set wrote %s, expected %s (check NENYA_SECRETS_DIR / NENYA_CONFIG_DIR in the install environment)", path, p.secretsFile)
-		}
-		fmt.Printf("Wrote client token to %s\n", path)
-		return true, nil
+		return bootstrapSecretsWithWriter(ctx, runner, execPath, p)
+	}
+	return bootstrapSecretsShim(p)
+}
+
+// bootstrapSecretsWithWriter delegates token creation to nenya's secret writer
+// after verifying no token already resolves. The install's config root is
+// pinned for BOTH the guard and the write: an unpinned call would resolve
+// nenya's §3.3 default (the system root) and inspect — or rotate — another
+// deployment's token.
+func bootstrapSecretsWithWriter(ctx context.Context, runner CommandRunner, execPath string, p installPaths) (bool, error) {
+	client := nenya.New(nenyaRunner{runner: runner, execPath: execPath}).WithConfigDir(p.configDir)
+
+	if skip, err := existingTokenGuard(ctx, client, p); skip || err != nil {
+		return false, err
 	}
 
+	path, err := client.SetClientTokenInRoot(ctx, p.configDir, "")
+	if err != nil {
+		return false, fmt.Errorf("secret set: %w", err)
+	}
+	if path == "" {
+		return false, fmt.Errorf("secret set wrote the token but reported no target path")
+	}
+	if filepath.Clean(path) != filepath.Clean(p.secretsFile) {
+		return false, fmt.Errorf("secret set wrote %s, expected %s (check NENYA_SECRETS_DIR / NENYA_CONFIG_DIR in the install environment)", path, p.secretsFile)
+	}
+	fmt.Printf("Wrote client token to %s\n", path)
+	return true, nil
+}
+
+// existingTokenGuard refuses to create a token when one already resolves:
+// `nenya secret get` sees credential-dir and env sources a local scan cannot;
+// when the reader does not cleanly answer "no token" (absent or failed), the
+// local scan complements it so an existing token is never rotated. skip is
+// true when the install must not create a token.
+func existingTokenGuard(ctx context.Context, client *nenya.Client, p installPaths) (skip bool, err error) {
+	readerResolvedNoToken := false
+	if client.SecretGetSupported(ctx) {
+		tok, err := client.SecretGet(ctx, "client-token")
+		switch {
+		case err == nil && tok != "":
+			fmt.Fprintf(os.Stderr, "Warning: the deployment already resolves a client token; not creating %s.\n", p.secretsFile)
+			return true, nil
+		case err == nil:
+			// Clean "no token" from the reader: skip the local scan.
+			readerResolvedNoToken = true
+		}
+	}
+	// The reader did not cleanly resolve "no token": complement with the local
+	// scan so an existing token is never rotated.
+	if !readerResolvedNoToken {
+		if found := secrets.ExistingTokenFile(p.secretsDir); found != "" {
+			fmt.Fprintf(os.Stderr, "Warning: a client token already exists in %s; not creating %s.\n", found, p.secretsFile)
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// bootstrapSecretsShim hand-writes the config-root secrets.json for released
+// binaries without the secret writer: the documented shim, retired once
+// `secret set` is everywhere.
+func bootstrapSecretsShim(p installPaths) (bool, error) {
 	if found := secrets.ExistingTokenFile(p.secretsDir); found != "" {
 		fmt.Fprintf(os.Stderr, "Warning: a client token already exists in %s; not creating %s.\n", found, p.secretsFile)
 		fmt.Fprintln(os.Stderr, "Delete it (or set NENYA_SECRETS_DIR) before creating a new one from the install.")
