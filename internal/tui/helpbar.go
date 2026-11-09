@@ -15,6 +15,8 @@ type KeyMap struct {
 	Add    key.Binding
 	Toggle key.Binding
 	Save   key.Binding
+	// Prev moves to the previous field in multi-field forms (shift+tab).
+	Prev key.Binding
 }
 
 func NewHelpModel() help.Model {
@@ -34,7 +36,7 @@ func NewHelpModel() help.Model {
 
 func (k KeyMap) ShortHelp() []key.Binding {
 	b := []key.Binding{}
-	for _, x := range []key.Binding{k.Up, k.Down, k.Select, k.Back, k.Quit, k.Delete, k.Add, k.Toggle, k.Save} {
+	for _, x := range []key.Binding{k.Up, k.Down, k.Select, k.Back, k.Quit, k.Delete, k.Add, k.Toggle, k.Save, k.Prev} {
 		if x.Help().Key != "" || x.Help().Desc != "" {
 			b = append(b, x)
 		}

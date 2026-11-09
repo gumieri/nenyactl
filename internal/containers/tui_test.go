@@ -1,6 +1,7 @@
 package containers
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -195,6 +196,146 @@ func TestContainersTUI_CustomScreen(t *testing.T) {
 		updated := update(&m, tea.KeyMsg{Type: tea.KeyCtrlC})
 		if !updated.quitting {
 			t.Error("expected quitting flag to be set")
+		}
+	})
+}
+
+func TestContainersTUI_WizardNavigation(t *testing.T) {
+	providers := []ProviderDef{
+		{Name: "gemini", Help: "Gemini", Auth: "sk-...", NeedsKey: true},
+		{Name: "ollama", Help: "Ollama (local)", Auth: "none", NeedsKey: false},
+	}
+
+	seed := func(t *testing.T) *tuiModel {
+		t.Helper()
+		m := newTUIModelWithProviders(providers)
+		m.selected[0] = true
+		updated := update(&m, tea.KeyMsg{Type: tea.KeyEnter})
+		return updated
+	}
+
+	t.Run("back navigation preserves entered key values", func(t *testing.T) {
+		m := seed(t)
+		m.keys[0].input.SetValue("typed-key")
+		back := update(m, tea.KeyMsg{Type: tea.KeyEsc})
+		if back.screen != screenSelect {
+			t.Fatalf("screen = %v, want screenSelect", back.screen)
+		}
+		again := update(back, tea.KeyMsg{Type: tea.KeyEnter})
+		if len(again.keys) != 1 {
+			t.Fatalf("keys = %d, want 1", len(again.keys))
+		}
+		if got := again.keys[0].input.Value(); got != "typed-key" {
+			t.Errorf("key value = %q, want typed-key (back-nav must not lose input)", got)
+		}
+	})
+
+	t.Run("submit blocked with a clear message while required keys are empty", func(t *testing.T) {
+		m := seed(t)
+		blocked := update(m, tea.KeyMsg{Type: tea.KeyEnter})
+		if blocked.quitting {
+			t.Fatal("submit must be blocked while a required key is empty")
+		}
+		if blocked.validationMsg == "" {
+			t.Fatal("expected a validation message naming the missing key")
+		}
+		if !strings.Contains(blocked.validationMsg, "gemini") {
+			t.Errorf("validation message %q must name the missing provider", blocked.validationMsg)
+		}
+		if got := blocked.keys[0].input.Value(); got != "" {
+			t.Errorf("validation must not fill the field, got %q", got)
+		}
+	})
+
+	t.Run("whitespace-only key does not pass the gate", func(t *testing.T) {
+		m := seed(t)
+		m.keys[0].input.SetValue("   ")
+		blocked := update(m, tea.KeyMsg{Type: tea.KeyEnter})
+		if blocked.quitting {
+			t.Fatal("whitespace-only key must not count as filled")
+		}
+		if !strings.Contains(blocked.validationMsg, "gemini") {
+			t.Errorf("validation message %q must name the missing provider", blocked.validationMsg)
+		}
+	})
+
+	t.Run("tab moves focus forward and back with shift+tab", func(t *testing.T) {
+		multi := newTUIModelWithProviders([]ProviderDef{
+			{Name: "gemini", Help: "Gemini", Auth: "sk-...", NeedsKey: true},
+			{Name: "openai", Help: "OpenAI", Auth: "sk-...", NeedsKey: true},
+		})
+		multi.selected[0] = true
+		multi.selected[1] = true
+		m := update(&multi, tea.KeyMsg{Type: tea.KeyEnter})
+		if m.keyCursor != 0 {
+			t.Fatalf("keyCursor = %d, want 0", m.keyCursor)
+		}
+		m = update(m, tea.KeyMsg{Type: tea.KeyTab})
+		if m.keyCursor != 1 {
+			t.Errorf("tab: keyCursor = %d, want 1", m.keyCursor)
+		}
+		m = update(m, tea.KeyMsg{Type: tea.KeyShiftTab})
+		if m.keyCursor != 0 {
+			t.Errorf("shift+tab: keyCursor = %d, want 0", m.keyCursor)
+		}
+	})
+
+	t.Run("tab wraps from the last field to the first", func(t *testing.T) {
+		multi := newTUIModelWithProviders([]ProviderDef{
+			{Name: "gemini", Help: "Gemini", Auth: "sk-...", NeedsKey: true},
+			{Name: "openai", Help: "OpenAI", Auth: "sk-...", NeedsKey: true},
+		})
+		multi.selected[0] = true
+		multi.selected[1] = true
+		m := update(&multi, tea.KeyMsg{Type: tea.KeyEnter})
+		m.keyCursor = 1
+		m = update(m, tea.KeyMsg{Type: tea.KeyTab})
+		if m.keyCursor != 0 {
+			t.Errorf("tab wrap: keyCursor = %d, want 0", m.keyCursor)
+		}
+	})
+
+	t.Run("validation message survives a no-op tab but clears on esc", func(t *testing.T) {
+		m := seed(t)
+		m = update(m, tea.KeyMsg{Type: tea.KeyEnter}) // arms the message
+		m = update(m, tea.KeyMsg{Type: tea.KeyTab})   // single field: no move
+		if m.validationMsg == "" {
+			t.Error("no-op tab must not erase the validation message")
+		}
+		back := update(m, tea.KeyMsg{Type: tea.KeyEsc})
+		if back.validationMsg != "" {
+			t.Error("esc must clear the validation message")
+		}
+		reentered := update(back, tea.KeyMsg{Type: tea.KeyEnter})
+		if reentered.validationMsg != "" {
+			t.Error("re-entering the keys screen must start without a stale message")
+		}
+	})
+
+	t.Run("unselecting the provider drops its typed key from results", func(t *testing.T) {
+		m := seed(t)
+		m.keys[0].input.SetValue("sk-typed")
+		back := update(m, tea.KeyMsg{Type: tea.KeyEsc})
+		back.selected[0] = false
+		back.updateTableRow(0)
+		again := update(back, tea.KeyMsg{Type: tea.KeyEnter})
+		if !again.quitting {
+			t.Fatal("no providers selected: enter should finish the wizard")
+		}
+		if got := again.Results(); len(got) != 0 {
+			t.Errorf("Results() = %v, want empty (unselected provider's typed key must not leak)", got)
+		}
+	})
+
+	t.Run("filled required keys allow submit", func(t *testing.T) {
+		m := seed(t)
+		m.keys[0].input.SetValue("sk-real")
+		done := update(m, tea.KeyMsg{Type: tea.KeyEnter})
+		if !done.quitting {
+			t.Error("enter with all required keys filled should quit/finish")
+		}
+		if got := done.Results()["gemini"]; got != "sk-real" {
+			t.Errorf("Results()[gemini] = %q, want sk-real", got)
 		}
 	})
 }

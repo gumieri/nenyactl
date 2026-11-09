@@ -3,6 +3,7 @@ package containers
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
@@ -70,6 +71,13 @@ type tuiModel struct {
 	customResults []customResult
 	keys          []keyField
 	keyCursor     int
+	// validationMsg is the submit-gate error shown on the keys and custom
+	// screens when required fields are still empty or invalid (NCTL-51).
+	validationMsg string
+	// submitted is true when the user finished deliberately via enter (the
+	// gated keys submit, or a select-screen finish); ctrl+c/esc/q aborts
+	// never set it (NCTL-51 review).
+	submitted     bool
 	quitting      bool
 	width, height int
 	helpModel     help.Model
@@ -93,7 +101,9 @@ func newTUIModel() tuiModel {
 // Pass the contract catalog when a nenya binary is available; BuiltinProviders
 // is the scaffold-time shim.
 func newTUIModelWithProviders(providers []ProviderDef) tuiModel {
-	providers = append([]ProviderDef{}, providers...)
+	// dedupeProviders allocates a fresh slice, so the caller's input (and the
+	// package-level BuiltinProviders) is never reordered by the sort below.
+	providers = dedupeProviders(providers)
 	sort.Slice(providers, func(i, j int) bool {
 		if providers[i].NeedsKey != providers[j].NeedsKey {
 			return providers[i].NeedsKey
@@ -136,9 +146,7 @@ func newTUIModelWithProviders(providers []ProviderDef) tuiModel {
 	customName.CharLimit = 128
 	customName.Width = 40
 
-	customKey := textinput.New()
-	customKey.Placeholder = "sk-..."
-	customKey.CharLimit = 256
+	customKey := newKeyInput("sk-...")
 	customKey.Width = 50
 
 	return tuiModel{
@@ -167,17 +175,20 @@ func (m tuiModel) helpKeyMap() tui.KeyMap {
 			Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
 			Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "continue")),
 			Toggle: key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
-			Quit:   key.NewBinding(key.WithKeys("ctrl+c", "q"), key.WithHelp("ctrl+c", "quit")),
+			Quit:   key.NewBinding(key.WithKeys("ctrl+c", "q", "esc"), key.WithHelp("ctrl+c/q/esc", "quit")),
 		}
 	case screenKeys:
 		return tui.KeyMap{
-			Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "continue")),
+			Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "submit")),
+			Toggle: key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next field")),
+			Prev:   key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "prev field")),
 			Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 			Quit:   key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 		}
 	default: // screenCustom
 		return tui.KeyMap{
 			Toggle: key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next field")),
+			Prev:   key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "prev field")),
 			Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "save")),
 			Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 			Quit:   key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
@@ -198,9 +209,17 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return model, selCmd
 			}
 		case screenKeys:
-			return m.updateKeys(msg)
+			// Command keys (ctrl+c/esc/enter/tab/shift+tab) are handled here;
+			// everything else (typing, backspace, arrows) falls through to
+			// the focused input below. Routing unhandled keys onward is what
+			// makes the fields typeable at all.
+			if model, keysCmd, handled := m.updateKeys(msg); handled {
+				return model, keysCmd
+			}
 		case screenCustom:
-			return m.updateCustom(msg)
+			if model, customCmd, handled := m.updateCustom(msg); handled {
+				return model, customCmd
+			}
 		}
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -235,11 +254,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // the table so the cursor can move.
 func (m *tuiModel) selectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	switch msg.String() {
-	case "ctrl+c", "esc":
-		m.quitting = true
-		return m, tea.Quit, true
-
-	case "q":
+	case "ctrl+c", "esc", "q":
 		m.quitting = true
 		return m, tea.Quit, true
 
@@ -247,6 +262,11 @@ func (m *tuiModel) selectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		if m.table.Cursor() == len(m.providers) {
 			m.screen = screenCustom
 			m.customFocus = 0
+			m.validationMsg = ""
+			// Defensive: any input left focused by an earlier visit must not
+			// render a second cursor next to the name field.
+			m.customName.Blur()
+			m.customKey.Blur()
 			return m, m.customName.Focus(), true
 		}
 
@@ -258,29 +278,32 @@ func (m *tuiModel) selectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		}
 
 		if selectedCount == 0 {
+			// Enter-driven finish (nothing to configure); custom entries
+			// saved on the custom screen must still be returned.
 			m.quitting = true
+			m.submitted = true
 			return m, tea.Quit, true
 		}
 
 		m.screen = screenKeys
-		m.keys = nil
-		m.keyCursor = 0
-
-		for i, p := range m.providers {
-			if m.selected[i] && p.NeedsKey {
-				ti := textinput.New()
-				ti.Placeholder = p.Auth
-				ti.CharLimit = 256
-				ti.Width = 60
-				m.keys = append(m.keys, keyField{name: p.Name, input: ti})
-			}
+		m.keys = syncKeyFields(m.providers, m.selected, m.keys)
+		// Preserve the working position across back-navigation; only clamp
+		// against a shrunken list (NCTL-51 review).
+		if m.keyCursor >= len(m.keys) {
+			m.keyCursor = len(m.keys) - 1
 		}
+		if m.keyCursor < 0 {
+			m.keyCursor = 0
+		}
+		m.validationMsg = ""
 
 		if len(m.keys) > 0 {
-			m.keys[0].input.Focus()
-			return m, nil, true
+			return m, m.keys[m.keyCursor].input.Focus(), true
 		}
+		// Enter-driven finish: only no-key providers are selected, but custom
+		// entries saved on the custom screen must still be returned.
 		m.quitting = true
+		m.submitted = true
 		return m, tea.Quit, true
 
 	case " ":
@@ -295,79 +318,236 @@ func (m *tuiModel) selectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	return m, nil, false
 }
 
-func (m *tuiModel) updateCustom(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *tuiModel) updateCustom(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	switch msg.String() {
 	case "ctrl+c":
 		m.quitting = true
-		return m, tea.Quit
+		return m, tea.Quit, true
 	case "esc":
+		m.validationMsg = ""
+		// Blur the active input so re-entry doesn't render two cursors
+		// (selectKey only focuses the name field).
+		if m.customFocus == 0 {
+			m.customName.Blur()
+		} else {
+			m.customKey.Blur()
+		}
 		m.screen = screenSelect
-		return m, nil
+		return m, nil, true
 
 	case "enter":
 		if m.customFocus == 0 {
 			m.customFocus = 1
-			return m, m.customKey.Focus()
+			m.customName.Blur()
+			m.validationMsg = ""
+			return m, m.customKey.Focus(), true
 		}
 
-		name := m.customName.Value()
-		key := m.customKey.Value()
+		name := strings.TrimSpace(m.customName.Value())
+		key := strings.TrimSpace(m.customKey.Value())
 		if name != "" && key != "" {
+			// A custom provider shadowing a builtin (or an earlier custom
+			// entry) would silently overwrite its key in Results — reject the
+			// duplicate instead (NCTL-51 review).
+			if m.customNameTaken(name) {
+				m.validationMsg = fmt.Sprintf("provider name %q is already in use", name)
+				return m, nil, true
+			}
+			m.validationMsg = ""
 			m.customResults = append(m.customResults, customResult{Name: name, Value: key})
 
 			m.customName.Reset()
 			m.customKey.Reset()
+			m.customKey.Blur()
 			m.customFocus = 0
-			return m, m.customName.Focus()
+			return m, m.customName.Focus(), true
 		}
+		m.validationMsg = "provider name and API key are both required"
+		return m, nil, true
 
-	case "tab":
+	case "tab", "shift+tab":
+		m.validationMsg = ""
 		m.customFocus = (m.customFocus + 1) % 2
 		if m.customFocus == 0 {
-			return m, m.customName.Focus()
+			m.customKey.Blur()
+			return m, m.customName.Focus(), true
 		}
-		return m, m.customKey.Focus()
+		m.customName.Blur()
+		return m, m.customKey.Focus(), true
 	}
 
-	return m, nil
+	// Unhandled keys fall through to the focused input.
+	return m, nil, false
 }
 
-func (m *tuiModel) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+// customNameTaken reports whether name collides with a builtin provider or a
+// custom entry already saved in this session (NCTL-51 review).
+func (m *tuiModel) customNameTaken(name string) bool {
+	for _, p := range m.providers {
+		if p.Name == name {
+			return true
+		}
+	}
+	for _, c := range m.customResults {
+		if c.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *tuiModel) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	switch msg.String() {
 	case "ctrl+c":
 		m.quitting = true
-		return m, tea.Quit
+		return m, tea.Quit, true
 
 	case "esc":
+		// NCTL-51: back navigation; entered values survive the round trip
+		// (the keys list is synced, not rebuilt, on re-entry).
 		m.screen = screenSelect
-		return m, nil
+		m.validationMsg = ""
+		return m, nil, true
 
 	case "enter":
-		m.quitting = true
-		return m, tea.Quit
-
-	case "tab":
-		if m.keyCursor < len(m.keys)-1 {
-			m.keys[m.keyCursor].input.Blur()
-			m.keyCursor++
-			return m, m.keys[m.keyCursor].input.Focus()
+		// NCTL-51: submit is gated until every required key field is filled;
+		// the user sees which fields are missing instead of a silent quit.
+		if missing := missingKeyFields(m.keys); len(missing) > 0 {
+			m.validationMsg = missingKeysMessage(missing)
+			return m, nil, true
 		}
+		m.quitting = true
+		m.submitted = true
+		return m, tea.Quit, true
+
+	case "tab", "shift+tab":
+		if len(m.keys) == 0 {
+			return m, nil, true
+		}
+		next := m.keyCursor + 1
+		if msg.String() == "shift+tab" {
+			next = m.keyCursor - 1
+		}
+		next = (next + len(m.keys)) % len(m.keys)
+		if next == m.keyCursor {
+			// Single field: no movement, keep the validation message.
+			return m, nil, true
+		}
+		// Clear the gate message only on an actual move; a no-op key press
+		// must not erase the "which fields are missing" hint (NCTL-51 review).
+		m.validationMsg = ""
+		m.keys[m.keyCursor].input.Blur()
+		m.keyCursor = next
+		return m, m.keys[m.keyCursor].input.Focus(), true
 	}
 
-	return m, nil
+	// Unhandled keys (typing, backspace, arrows) fall through so the focused
+	// input receives them.
+	return m, nil, false
+}
+
+// missingKeysMessage renders the submit-gate error. Long lists are capped so
+// the line survives narrow terminals (NCTL-51 review).
+func missingKeysMessage(missing []string) string {
+	const maxNamed = 5
+	if len(missing) > maxNamed {
+		shown := missing[:maxNamed]
+		return fmt.Sprintf(
+			"required key(s) still empty: %s …and %d more — fill them, or go back (esc) and unselect the provider",
+			strings.Join(shown, ", "), len(missing)-maxNamed,
+		)
+	}
+	return fmt.Sprintf(
+		"required key(s) still empty: %s — fill them, or go back (esc) and unselect the provider",
+		strings.Join(missing, ", "),
+	)
+}
+
+// newKeyInput builds a masked API-key input. Keys are credentials: they are
+// echo-masked so they do not land in terminal scrollback (NCTL-51 review);
+// the placeholder still shows the expected format.
+func newKeyInput(placeholder string) textinput.Model {
+	ti := textinput.New()
+	ti.Placeholder = placeholder
+	ti.EchoMode = textinput.EchoPassword
+	ti.EchoCharacter = '•'
+	ti.CharLimit = 512
+	ti.Width = 60
+	return ti
+}
+
+// syncKeyFields rebuilds the key-entry list from the current selection while
+// preserving inputs already typed for providers still selected (NCTL-51:
+// back-and-forth navigation must not lose entered values). Provider names are
+// unique by construction (dedupeProviders), so name-keyed preservation is
+// unambiguous.
+func syncKeyFields(providers []ProviderDef, selected map[int]bool, existing []keyField) []keyField {
+	previousValues := make(map[string]string, len(existing))
+	for _, f := range existing {
+		previousValues[f.name] = f.input.Value()
+	}
+
+	keys := make([]keyField, 0, len(providers))
+	for i, p := range providers {
+		if !selected[i] || !p.NeedsKey {
+			continue
+		}
+		ti := newKeyInput(p.Auth)
+		ti.SetValue(previousValues[p.Name])
+		// Defensive: bubbles v1.0.0 already lands the cursor at the end of
+		// the restored value on SetValue; pin it explicitly in case that
+		// changes.
+		ti.CursorEnd()
+		keys = append(keys, keyField{name: p.Name, input: ti})
+	}
+	return keys
+}
+
+// dedupeProviders drops later entries with a name already seen, keeping the
+// first. Duplicate provider names would silently misroute typed key values in
+// syncKeyFields and collapse in Results (NCTL-51 review).
+func dedupeProviders(providers []ProviderDef) []ProviderDef {
+	seen := make(map[string]bool, len(providers))
+	out := make([]ProviderDef, 0, len(providers))
+	for _, p := range providers {
+		if seen[p.Name] {
+			continue
+		}
+		seen[p.Name] = true
+		out = append(out, p)
+	}
+	return out
+}
+
+// isEmptyKeyField reports whether a required key field is still unfilled;
+// whitespace-only input counts as empty (NCTL-51 review).
+func isEmptyKeyField(f keyField) bool {
+	return strings.TrimSpace(f.input.Value()) == ""
+}
+
+// missingKeyFields returns the names of required key fields still empty
+// (NCTL-51).
+func missingKeyFields(keys []keyField) []string {
+	var missing []string
+	for _, f := range keys {
+		if isEmptyKeyField(f) {
+			missing = append(missing, f.name)
+		}
+	}
+	return missing
 }
 
 func (m *tuiModel) updateTableRow(idx int) {
+	// Only the toggled row's content changes; avoid rewriting every row.
 	rows := m.table.Rows()
-	for i := range m.providers {
-		check := "  "
-		if m.selected[i] {
-			check = "✓ "
-		}
-		if i < len(rows) {
-			rows[i] = table.Row{check, m.providers[i].Name, m.providers[i].Help, keyReqText(m.providers[i])}
-		}
+	if idx < 0 || idx >= len(m.providers) || idx >= len(rows) {
+		return
 	}
+	check := "  "
+	if m.selected[idx] {
+		check = "✓ "
+	}
+	rows[idx] = table.Row{check, m.providers[idx].Name, m.providers[idx].Help, keyReqText(m.providers[idx])}
 	m.table.SetRows(rows)
 }
 
@@ -459,7 +639,7 @@ func (m tuiModel) renderCustom() string {
 	nameView := nameStyle.Render(m.customName.View())
 	keyView := keyStyle.Render(m.customKey.View())
 
-	body := lipgloss.JoinVertical(lipgloss.Top,
+	rows := []string{
 		title,
 		"",
 		nameLabel,
@@ -469,7 +649,14 @@ func (m tuiModel) renderCustom() string {
 		keyLabel,
 		"",
 		keyView,
-	)
+	}
+	// NCTL-51 review: surface validation errors (duplicate/missing fields)
+	// on the custom screen too.
+	if m.validationMsg != "" {
+		rows = append(rows, "", theme.Error.Render(m.validationMsg))
+	}
+
+	body := lipgloss.JoinVertical(lipgloss.Top, rows...)
 
 	baseStyle := lipgloss.NewStyle().
 		Width(m.width).
@@ -493,6 +680,10 @@ func (m tuiModel) renderKeys() string {
 			prefix = "●"
 		}
 		label := theme.Body.Render(prefix + " " + f.name)
+		// NCTL-51: required fields are marked until filled.
+		if isEmptyKeyField(f) {
+			label += theme.Error.Render("  (required)")
+		}
 
 		inputStyle := theme.InputBlurred
 		if i == m.keyCursor {
@@ -506,6 +697,11 @@ func (m tuiModel) renderKeys() string {
 		if i < len(m.keys)-1 {
 			rows = append(rows, "")
 		}
+	}
+
+	if m.validationMsg != "" {
+		rows = append(rows, "")
+		rows = append(rows, theme.Error.Render(m.validationMsg))
 	}
 
 	for _, cr := range m.customResults {
@@ -531,10 +727,20 @@ func (m tuiModel) renderKeys() string {
 }
 
 func (m tuiModel) Results() map[string]string {
+	// Only keys for still-selected providers leave the wizard: typing a key,
+	// going back, and unselecting the provider must not persist the orphan
+	// value (NCTL-51 review).
+	selectedNames := make(map[string]bool, len(m.providers))
+	for i, p := range m.providers {
+		if m.selected[i] {
+			selectedNames[p.Name] = true
+		}
+	}
 	result := make(map[string]string)
 	for _, f := range m.keys {
-		if f.input.Value() != "" {
-			result[f.name] = f.input.Value()
+		value := f.input.Value()
+		if selectedNames[f.name] && !isEmptyKeyField(f) {
+			result[f.name] = strings.TrimSpace(value)
 		}
 	}
 	for _, c := range m.customResults {
@@ -545,7 +751,9 @@ func (m tuiModel) Results() map[string]string {
 
 // CollectProviderKeysFrom runs the provider-key picker with the given provider
 // catalog. Callers with an installed nenya pass the contract catalog so the
-// picker matches what the gateway actually supports.
+// picker matches what the gateway actually supports. It returns (nil, nil)
+// when the user aborts (ctrl+c/esc/q) — only a deliberate submit yields the
+// collected keys.
 func CollectProviderKeysFrom(providers []ProviderDef) (map[string]string, error) {
 	m := newTUIModelWithProviders(providers)
 	p := tea.NewProgram(&m, tea.WithAltScreen())
@@ -553,8 +761,9 @@ func CollectProviderKeysFrom(providers []ProviderDef) (map[string]string, error)
 	if err != nil {
 		return nil, err
 	}
-	if model, ok := result.(*tuiModel); ok {
+	if model, ok := result.(*tuiModel); ok && model.submitted {
 		return model.Results(), nil
 	}
+	// Aborted: nothing to persist.
 	return nil, nil
 }
