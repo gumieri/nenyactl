@@ -54,6 +54,16 @@ type dirResolution struct {
 // reconstruct the resolution themselves.
 func (r dirResolution) ContractPaths() *nenya.Paths { return r.cpaths }
 
+// contractSecretsDir returns the contract-resolved secrets directory for
+// bare-metal config roots (the only deployments `nenya paths --json` refines),
+// or "" when it is unavailable — callers fall back to the local layout.
+func (r dirResolution) contractSecretsDir() string {
+	if r.Kind == dirConfigRoot && r.cpaths != nil {
+		return r.cpaths.SecretsDir
+	}
+	return ""
+}
+
 // pathsProbe resolves the deployment's filesystem contract through
 // `nenya paths --json`. A non-empty dir is passed as --config-dir; an empty
 // dir means no target flags, so nenya applies §3.3 itself (NENYA_CONFIG_DIR /

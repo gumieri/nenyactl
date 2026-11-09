@@ -109,6 +109,24 @@ var PickerKeyMap = KeyMap{
 	Toggle: key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
 }
 
+// ProvidersKeyMap is the config editor's providers screen: navigation, edit
+// entry, and back (NCTL-45).
+var ProvidersKeyMap = KeyMap{
+	Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+	Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+	Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "set key")),
+	Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
+	Quit:   key.NewBinding(key.WithKeys("ctrl+c", "q"), key.WithHelp("ctrl+c", "quit")),
+}
+
+// ProviderEditKeyMap is the config editor's masked provider-key input:
+// record the typed key or cancel (NCTL-45).
+var ProviderEditKeyMap = KeyMap{
+	Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "record key")),
+	Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
+	Quit:   key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
+}
+
 // ReviewKeyMap is the save-review screen shown before changes are written:
 // confirm to save, cancel to return to editing (NCTL-44).
 var ReviewKeyMap = KeyMap{

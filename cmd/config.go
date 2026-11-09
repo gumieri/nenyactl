@@ -11,7 +11,9 @@ import (
 	"github.com/gumieri/nenyactl/internal/config"
 	"github.com/gumieri/nenyactl/internal/detect"
 	"github.com/gumieri/nenyactl/internal/install"
+	"github.com/gumieri/nenyactl/internal/nenya"
 	"github.com/gumieri/nenyactl/internal/paths"
+	"github.com/gumieri/nenyactl/internal/secrets"
 	"github.com/spf13/cobra"
 )
 
@@ -107,19 +109,9 @@ func init() {
 }
 
 func runConfigEdit(cmd *cobra.Command, args []string) error {
-	var res dirResolution
-	if configEditDir != "" {
-		var err error
-		res, err = resolveDir(cmd.Context(), configEditDir, dirAttach, false)
-		if err != nil {
-			return err
-		}
-	} else {
-		info, err := detect.Detect()
-		if err != nil {
-			return err
-		}
-		res = detectedResolution(info)
+	res, err := resolveEditDir(cmd.Context())
+	if err != nil {
+		return err
 	}
 
 	client := res.Contract()
@@ -134,21 +126,79 @@ func runConfigEdit(cmd *cobra.Command, args []string) error {
 
 	fmt.Println(infoStyle.Render("›"), "Editing:", res.ConfigDir())
 
-	result, changed, err := config.RunConfigEditor(desc.Config)
+	secretsDir := secretsDirFor(res, desc)
+	result, changed, err := config.RunConfigEditor(desc.Config, providerKeyStatus(secretsDir))
 	if err != nil {
 		return fmt.Errorf("editor: %w", err)
 	}
 
-	if !changed || len(result.Changes) == 0 {
+	if !changed || (len(result.Changes) == 0 && len(result.KeyChanges) == 0) {
 		fmt.Println(infoStyle.Render("›"), "No changes made")
 		return nil
 	}
 
-	// Apply every change through nenya's single writer. nenya chooses the
-	// target file (managed drop-in or config file), merges, and writes
-	// atomically, so nenyactl never reproduces the loader or the merge. Each
-	// key is one call, so a mid-way failure is reported with what already
-	// landed rather than pretending the edit was atomic.
+	// Provider keys go through the single writer, which needs the secrets
+	// directory — fail before any write when it cannot be resolved, so the
+	// run is all-or-nothing at the gate level.
+	if len(result.KeyChanges) > 0 && secretsDir == "" {
+		return fmt.Errorf("cannot determine the secrets directory for %s", res.Path)
+	}
+
+	if err := applyConfigChanges(cmd, client, result); err != nil {
+		return err
+	}
+	return applyProviderKeyChanges(cmd, client, secretsDir, result)
+}
+
+// resolveEditDir resolves the deployment the edit targets: --dir when given,
+// auto-detection otherwise.
+func resolveEditDir(ctx context.Context) (dirResolution, error) {
+	if configEditDir != "" {
+		return resolveDir(ctx, configEditDir, dirAttach, false)
+	}
+	info, err := detect.Detect()
+	if err != nil {
+		return dirResolution{}, err
+	}
+	return detectedResolution(info), nil
+}
+
+// secretsDirFor resolves the secrets directory. For a bare-metal config root,
+// nenya's contract answer (paths --json / describe) wins — it honors
+// NENYA_SECRETS_DIR outside the config root. For container deployments,
+// describe runs host-side and its answer is the host config root's layout,
+// while the compose file mounts the real secrets dir into the container —
+// there the local resolution (the mounted dir nenyactl manages) is correct,
+// mirroring every sibling writer call site.
+func secretsDirFor(res dirResolution, desc nenya.Description) string {
+	if res.Kind == dirConfigRoot {
+		if desc.Paths.SecretsDir != "" {
+			return desc.Paths.SecretsDir
+		}
+		if c := res.contractSecretsDir(); c != "" {
+			return c
+		}
+	}
+	return res.Info.SecretsDir()
+}
+
+// providerKeyStatus gathers secrets-file key presence for the providers
+// screen: names only, never values (NCTL-45).
+func providerKeyStatus(secretsDir string) []config.ProviderKeyStatus {
+	var status []config.ProviderKeyStatus
+	for _, name := range secrets.ProviderKeyNames(secretsDir) {
+		// The merge spans several *.json documents; the label stays generic.
+		status = append(status, config.ProviderKeyStatus{Name: name, KeySet: true, Source: "secrets dir"})
+	}
+	return status
+}
+
+// applyConfigChanges applies every config change through nenya's single
+// writer. nenya chooses the target file (managed drop-in or config file),
+// merges, and writes atomically, so nenyactl never reproduces the loader or
+// the merge. Each key is one call, so a mid-way failure is reported with what
+// already landed rather than pretending the edit was atomic.
+func applyConfigChanges(cmd *cobra.Command, client *nenya.Client, result *config.EditorResult) error {
 	keys := make([]string, 0, len(result.Changes))
 	for k := range result.Changes {
 		keys = append(keys, k)
@@ -167,6 +217,27 @@ func runConfigEdit(cmd *cobra.Command, args []string) error {
 		applied = append(applied, key)
 		fmt.Println(successStyle.Render("✓"), key, "→", path)
 	}
+	return nil
+}
 
+// applyProviderKeyChanges applies provider-key changes through nenya's single
+// writer — the same path as `nenyactl secret set --provider <name>` (NCTL-45).
+// A mid-way failure reports what already landed (config keys and prior
+// provider keys), mirroring applyConfigChanges.
+func applyProviderKeyChanges(cmd *cobra.Command, client *nenya.Client, secretsDir string, result *config.EditorResult) error {
+	writer := client.SecretWriterFor(secretsDir)
+	ops := result.ProviderKeys()
+	var applied []string
+	for _, op := range ops {
+		path, err := writer.SetProviderKey(cmd.Context(), op.Provider, op.Value)
+		if err != nil {
+			if len(applied) > 0 {
+				return fmt.Errorf("apply provider key %s: %w (already applied: %s)", op.Provider, err, strings.Join(applied, ", "))
+			}
+			return fmt.Errorf("apply provider key %s: %w", op.Provider, err)
+		}
+		applied = append(applied, op.Provider)
+		fmt.Println(successStyle.Render("✓"), "provider key", op.Provider, "→", path)
+	}
 	return nil
 }

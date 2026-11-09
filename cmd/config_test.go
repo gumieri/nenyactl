@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/gumieri/nenyactl/internal/detect"
+	"github.com/gumieri/nenyactl/internal/nenya"
 )
 
 // stubBootstrapContent replaces the example-config probe with canned content
@@ -73,6 +76,35 @@ func TestRunConfigInit(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(tmp, "config.json")); os.IsNotExist(err) {
 			t.Error("config.json not created by runConfigInit")
+		}
+	})
+}
+
+func TestSecretsDirFor(t *testing.T) {
+	info := &detect.Info{Mode: detect.ModeContainer, DataDir: "/host/deploy"}
+
+	t.Run("container deployments ignore the host-side contract answer", func(t *testing.T) {
+		res := dirResolution{Kind: dirContainerRoot, Info: info}
+		desc := nenya.Description{Paths: nenya.Paths{SecretsDir: "/host/.config/nenya/secrets"}}
+		if got := secretsDirFor(res, desc); got != info.SecretsDir() {
+			t.Errorf("secretsDirFor = %q, want the container shim %q (describe runs host-side)", got, info.SecretsDir())
+		}
+	})
+
+	t.Run("bare-metal config roots prefer the contract answer", func(t *testing.T) {
+		infoBM := &detect.Info{Mode: detect.ModeBareMetal, ConfigFile: "/root/.config/nenya/config.json"}
+		res := dirResolution{Kind: dirConfigRoot, Info: infoBM}
+		desc := nenya.Description{Paths: nenya.Paths{SecretsDir: "/custom/nenya-secrets"}}
+		if got := secretsDirFor(res, desc); got != "/custom/nenya-secrets" {
+			t.Errorf("secretsDirFor = %q, want the contract answer /custom/nenya-secrets", got)
+		}
+	})
+
+	t.Run("empty contract answer falls back to the local layout", func(t *testing.T) {
+		infoBM := &detect.Info{Mode: detect.ModeBareMetal, ConfigFile: "/root/.config/nenya/config.json"}
+		res := dirResolution{Kind: dirConfigRoot, Info: infoBM}
+		if got := secretsDirFor(res, nenya.Description{}); got != infoBM.SecretsDir() {
+			t.Errorf("secretsDirFor = %q, want the local shim %q", got, infoBM.SecretsDir())
 		}
 	})
 }

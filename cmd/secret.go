@@ -211,7 +211,13 @@ func runSecretSet(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	secretsDir := res.Info.SecretsDir()
+	// Prefer the contract answer for bare-metal config roots (honors
+	// NENYA_SECRETS_DIR outside the config root), so this path and the config
+	// editor's providers screen always write to the same file.
+	secretsDir := res.contractSecretsDir()
+	if secretsDir == "" {
+		secretsDir = res.Info.SecretsDir()
+	}
 	if secretsDir == "" {
 		return fmt.Errorf("cannot determine the secrets directory for %s", res.Path)
 	}

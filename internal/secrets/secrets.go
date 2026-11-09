@@ -1,3 +1,9 @@
+// Package secrets provides nenyactl-side helpers around nenya's secrets
+// documents: token/key generation, and read-only compatibility checks (client
+// token, provider-key NAMES) over a deployment's secrets directory. These
+// checks are document shims for the window before contract read surfaces
+// exist — nenya's own reader (`nenya secret get`) and single writer remain
+// the sources of truth.
 package secrets
 
 import (

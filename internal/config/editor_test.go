@@ -85,7 +85,7 @@ func TestNewConfigModel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg, []byte(testConfig))
+	m := newConfigModel(cfg, []byte(testConfig), nil)
 	if len(m.sections) == 0 {
 		t.Error("expected non-empty sections")
 	}
@@ -103,7 +103,7 @@ func TestNewConfigModelDoesNotDuplicateAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg, []byte(effective))
+	m := newConfigModel(cfg, []byte(effective), nil)
 
 	count := 0
 	for _, s := range m.sections {
@@ -128,7 +128,7 @@ func TestConfigEditorValueInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := newConfigModel(cfg, []byte(testConfig))
+	m := newConfigModel(cfg, []byte(testConfig), nil)
 	m.loadSection("governance")
 	m.startEdit(0)
 	m.screen = screenEdit
@@ -150,7 +150,7 @@ func TestApplyEditTopLevelScalarKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg, []byte(scalar))
+	m := newConfigModel(cfg, []byte(scalar), nil)
 	m.loadSection("log_level")
 	if len(m.entries) != 1 || m.entries[0].Key != "log_level" {
 		t.Fatalf("entries = %+v, want one log_level entry", m.entries)
@@ -174,7 +174,7 @@ func TestLoadSection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg, []byte(testConfig))
+	m := newConfigModel(cfg, []byte(testConfig), nil)
 	if len(m.sections) == 0 {
 		t.Fatal("no sections")
 	}
@@ -197,7 +197,7 @@ func TestApplyEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg, []byte(testConfig))
+	m := newConfigModel(cfg, []byte(testConfig), nil)
 	m.loadSection("governance")
 	if len(m.entries) == 0 {
 		t.Fatal("expected entries")
@@ -226,7 +226,7 @@ func TestApplyEditPreservesComments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg, []byte(testConfig))
+	m := newConfigModel(cfg, []byte(testConfig), nil)
 	m.loadSection("governance")
 	m.cursor = 0
 	m.editInput.SetValue("500000")
@@ -247,7 +247,7 @@ func TestAgentsModeToggleRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg, []byte(testConfig))
+	m := newConfigModel(cfg, []byte(testConfig), nil)
 	m.screen = screenAgents
 
 	// Toggling the mode is not an agents-list edit: it must not mark the
@@ -276,7 +276,7 @@ func TestResultIncludesDirtyAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newConfigModel(cfg, []byte(testConfig))
+	m := newConfigModel(cfg, []byte(testConfig), nil)
 	m.agents = []agentEntry{{Name: "build", Strategy: "fallback", Models: []string{"m"}}}
 	m.agentsDirty = true
 
@@ -289,21 +289,20 @@ func TestResultIncludesDirtyAgents(t *testing.T) {
 	}
 }
 
-func TestIsSectionObject(t *testing.T) {
-	v, err := jsonc.ParseDoc([]byte(testConfig))
+func TestAgentsSectionIsObject(t *testing.T) {
+	// The agents editor opens for an object section; checked directly via
+	// the type assertion (isSectionObject was dead production code and was
+	// removed).
+	v, err := jsonc.ParseDoc([]byte(`{"agents": {"mode": "manual"}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	for _, key := range jsonc.TopLevelKeys(v) {
-		field, ok := jsonc.GetField(v, key)
-		if !ok {
-			continue
-		}
-		isObj := isSectionObject(field)
-		if _, ok := field.Value.(*hujson.Object); ok && !isObj {
-			t.Errorf("isSectionObject(%s) = false, want true", key)
-		}
+	field, ok := jsonc.GetField(v, "agents")
+	if !ok {
+		t.Fatal("agents section missing")
+	}
+	if _, isObj := field.Value.(*hujson.Object); !isObj {
+		t.Errorf("agents section = %T, want object", field.Value)
 	}
 }
 

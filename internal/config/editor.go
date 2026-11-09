@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -30,6 +31,11 @@ const (
 	// screenReview shows the full pending change set before anything is
 	// written; save only happens from here (NCTL-44).
 	screenReview
+	// screenProviders lists configured providers with their key status and
+	// records set/rotate ops (NCTL-45).
+	screenProviders
+	// screenProviderEdit is the masked key input for one provider (NCTL-45).
+	screenProviderEdit
 )
 
 // confirmKind distinguishes what a pending confirmation would remove.
@@ -44,6 +50,12 @@ const (
 type sectionInfo struct {
 	name    string
 	isAgent bool
+	// isProviders marks the section that opens the providers key-status
+	// screen (NCTL-45): the raw JSON view cannot show whether a key is
+	// wired, so the section opens the dedicated screen instead. Unlike
+	// agents, it is never synthesized — the screen exists only when the
+	// effective document has a providers section.
+	isProviders bool
 }
 
 type configEntry struct {
@@ -91,6 +103,7 @@ type configModel struct {
 	sectionsView  viewport.Model
 	keysView      viewport.Model
 	agentsView    viewport.Model
+	providersView viewport.Model
 	width, height int
 	helpModel     help.Model
 
@@ -103,12 +116,63 @@ type configModel struct {
 	// reviewFrom is the screen the save was requested from, so esc returns
 	// the user to their editing context.
 	reviewFrom configScreen
+	// validationMsg is an inline error on the providers/provider-edit
+	// screens (empty key, etc.); cleared on navigation (NCTL-45).
+	validationMsg string
+
+	// Provider-key state (NCTL-45). providerRows drives the providers
+	// screen; keyChanges holds typed (masked) values until the caller
+	// applies them through nenya's single writer — the editor never writes
+	// secrets itself.
+	providerRows    []ProviderKeyStatus
+	providerCursor  int
+	keyInput        textinput.Model
+	editingProvider string
+	keyChanges      map[string]string
 
 	saved bool
 	quit  bool
 }
 
-func newConfigModel(cfg *hujson.Value, effective []byte) configModel {
+// ProviderKeyStatus reports one provider's key presence for the providers
+// screen: set/unset and where the key lives — never the value (NCTL-45).
+// Name is the RAW config key; display sites run it through
+// sanitizeConfigName, and ops recorded against it (KeyChanges) keep the raw
+// name so the key lands under the provider nenya actually has configured.
+type ProviderKeyStatus struct {
+	Name   string
+	KeySet bool
+	// Source is where the key lives: "secrets dir" (single-writer managed,
+	// from the local *.json shim), "config" (a config-level api_key), "env
+	// ref"/"file ref" (defensive — describe redacts refs, so this only
+	// appears against raw documents), or "" when unset.
+	Source string
+}
+
+// KeyOp is one provider-key change made on the providers screen. The caller
+// applies it through nenya's single writer — the same path as
+// `nenyactl secret set --provider <name>` (NCTL-45).
+type KeyOp struct {
+	Provider string
+	// Value is the new key. Rotate is the same op with a different value.
+	Value string
+}
+
+// ProviderKeys returns the pending provider-key changes in stable order.
+func (r *EditorResult) ProviderKeys() []KeyOp {
+	names := make([]string, 0, len(r.KeyChanges))
+	for name := range r.KeyChanges {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	ops := make([]KeyOp, 0, len(names))
+	for _, name := range names {
+		ops = append(ops, KeyOp{Provider: name, Value: r.KeyChanges[name]})
+	}
+	return ops
+}
+
+func newConfigModel(cfg *hujson.Value, effective []byte, keyStatus []ProviderKeyStatus) configModel {
 	sections := jsonc.TopLevelKeys(cfg)
 
 	// The effective config from describe already contains an "agents" section
@@ -135,6 +199,7 @@ func newConfigModel(cfg *hujson.Value, effective []byte) configModel {
 		sectionsView:   viewport.New(0, 0),
 		keysView:       viewport.New(0, 0),
 		agentsView:     viewport.New(0, 0),
+		providersView:  viewport.New(0, 0),
 		helpModel:      tui.NewHelpModel(),
 		changes:        make(map[string]string),
 		originalValues: make(map[string]string),
@@ -142,13 +207,35 @@ func newConfigModel(cfg *hujson.Value, effective []byte) configModel {
 	m.editInput.CharLimit = 256
 	m.editInput.Width = 50
 
+	// The provider-key input is masked: keys are credentials and must not
+	// land in terminal scrollback (NCTL-45). The limit is generous — provider
+	// keys are typically < 512 bytes, but silent truncation of a longer key
+	// would record a broken credential.
+	m.keyInput = textinput.New()
+	m.keyInput.Placeholder = "sk-..."
+	m.keyInput.EchoMode = textinput.EchoPassword
+	m.keyInput.EchoCharacter = '•'
+	m.keyInput.CharLimit = 2048
+	m.keyInput.Width = 50
+	m.keyChanges = make(map[string]string)
+	m.providerRows = buildProviderRows(cfg, keyStatus)
+
 	// Fill sections array. An existing "agents" section opens the agents
 	// editor (not the raw JSON view, where object values cannot be edited); a
-	// synthetic one is appended when the effective config has none.
+	// synthetic one is appended when the effective config has none. The
+	// providers section opens the key-status screen only when it is an
+	// object; arrays/scalars fall back to the generic JSON view.
 	for i, key := range sections {
+		isProvidersObj := false
+		if key == "providers" {
+			if pv, ok := jsonc.GetField(cfg, key); ok {
+				_, isProvidersObj = pv.Value.(*hujson.Object)
+			}
+		}
 		m.sections[i] = sectionInfo{
-			name:    key,
-			isAgent: key == "agents",
+			name:        key,
+			isAgent:     key == "agents",
+			isProviders: isProvidersObj,
 		}
 	}
 	// Add the synthetic agents section at the end when the effective config
@@ -169,6 +256,7 @@ func newConfigModel(cfg *hujson.Value, effective []byte) configModel {
 	// WindowSizeMsg arrives (the scroll helpers early-return at height 0).
 	m.updateSectionsContent()
 	m.updateAgentsContent()
+	m.updateProvidersContent()
 
 	return m
 }
@@ -248,6 +336,10 @@ func (m configModel) helpKeyMap() tui.KeyMap {
 		return tui.ConfirmKeyMap
 	case screenReview:
 		return tui.ReviewKeyMap
+	case screenProviders:
+		return tui.ProvidersKeyMap
+	case screenProviderEdit:
+		return tui.ProviderEditKeyMap
 	default:
 		return tui.SectionsKeyMap
 	}
@@ -267,6 +359,8 @@ func (m *configModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.keysView.Height = h
 		m.agentsView.Width = msg.Width - 6
 		m.agentsView.Height = h
+		m.providersView.Width = msg.Width - 6
+		m.providersView.Height = h
 
 	case tea.KeyMsg:
 		switch m.screen {
@@ -278,6 +372,13 @@ func (m *configModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateEdit(msg)
 		case screenAgents:
 			return m.updateAgents(msg)
+		case screenProviders:
+			return m.updateProviders(msg)
+		case screenProviderEdit:
+			// updateProviderEdit fully handles KeyMsgs (commands + input
+			// forwarding); only non-KeyMsg messages reach the input update
+			// below.
+			return m.updateProviderEdit(msg)
 		case screenConfirmDelete:
 			return m.updateConfirmDelete(msg)
 		case screenReview:
@@ -288,6 +389,8 @@ func (m *configModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenEdit:
 		m.editInput, _ = m.editInput.Update(msg)
+	case screenProviderEdit:
+		m.keyInput, _ = m.keyInput.Update(msg)
 	}
 
 	return m, nil
@@ -308,6 +411,15 @@ func (m *configModel) updateSections(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.screen = screenAgents
 				m.agentCursor = 0
 				m.updateAgentsContent()
+			} else if section.isProviders {
+				// NCTL-45: the providers section opens the key-status screen
+				// instead of the raw JSON view, which cannot show whether a
+				// key is actually wired (describe redacts it either way).
+				m.screen = screenProviders
+				m.providerCursor = 0
+				m.validationMsg = ""
+				m.updateProvidersContent()
+				m.scrollProviders()
 			} else {
 				m.loadSection(section.name)
 				m.screen = screenKeys
@@ -463,6 +575,91 @@ func (m *configModel) updateAgentsAction(key string) (tea.Model, tea.Cmd, bool) 
 	return m, nil, false
 }
 
+// updateProviders handles navigation and edit entry on the providers screen
+// (NCTL-45).
+func (m *configModel) updateProviders(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "q":
+		m.quit = true
+		return m, tea.Quit
+	case "esc":
+		m.screen = screenSections
+		m.cursor = 0
+		m.scrollSections()
+		return m, nil
+	case "enter":
+		if m.providerCursor >= 0 && m.providerCursor < len(m.providerRows) {
+			raw := m.providerRows[m.providerCursor].Name
+			if raw == "" || sanitizeConfigName(raw) != raw {
+				// Refuse, never re-key: the op must land under the exact
+				// config name, and an empty or control-bearing name is
+				// hostile input.
+				m.validationMsg = "provider name is empty or contains control characters — fix it in the config file first"
+				return m, nil
+			}
+			m.editingProvider = raw
+			m.keyInput.SetValue("")
+			m.validationMsg = ""
+			m.screen = screenProviderEdit
+			return m, m.keyInput.Focus()
+		}
+		return m, nil
+	case "up", "k":
+		if m.providerCursor > 0 {
+			m.providerCursor--
+			m.validationMsg = ""
+			m.updateProvidersContent()
+			m.scrollProviders()
+		}
+		return m, nil
+	case "down", "j":
+		if m.providerCursor < len(m.providerRows)-1 {
+			m.providerCursor++
+			m.validationMsg = ""
+			m.updateProvidersContent()
+			m.scrollProviders()
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+// updateProviderEdit resolves the masked key input: enter records the
+// set/rotate op (applied later by the caller through nenya's single writer),
+// esc discards it (NCTL-45).
+func (m *configModel) updateProviderEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		m.quit = true
+		return m, tea.Quit
+	case "esc":
+		m.editingProvider = ""
+		m.validationMsg = ""
+		m.keyInput.Blur()
+		m.updateProvidersContent()
+		m.screen = screenProviders
+		return m, nil
+	case "enter":
+		value := strings.TrimSpace(m.keyInput.Value())
+		if value == "" {
+			m.validationMsg = "key is empty — type a key, or esc to cancel"
+			return m, nil
+		}
+		m.keyChanges[m.editingProvider] = value
+		m.editingProvider = ""
+		m.validationMsg = ""
+		m.keyInput.Blur()
+		m.updateProvidersContent()
+		m.screen = screenProviders
+		return m, nil
+	}
+	// Unhandled keys (typing, backspace, arrows) reach the masked input here:
+	// the outer Update switch returns on handled KeyMsgs first, so without
+	// this forward the input would never receive keystrokes.
+	m.keyInput, _ = m.keyInput.Update(msg)
+	return m, nil
+}
+
 // updateConfirmDelete resolves a pending destructive-operation confirmation:
 // y performs it, n/esc returns to the originating screen unchanged.
 func (m *configModel) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -539,6 +736,7 @@ func (m *configModel) discardAll() {
 	}
 	m.changes = make(map[string]string)
 	m.originalValues = make(map[string]string)
+	m.keyChanges = make(map[string]string)
 	m.agents = nil
 	m.agentsDirty = false
 	m.resetCursor()
@@ -772,6 +970,10 @@ func (m configModel) View() string {
 		content = m.viewConfirmDelete(theme)
 	case screenReview:
 		content = m.viewReview(theme)
+	case screenProviders:
+		content = m.viewProviders(theme)
+	case screenProviderEdit:
+		content = m.viewProviderEdit(theme)
 	}
 
 	helpView := m.helpModel.View(m.helpKeyMap())
@@ -873,7 +1075,7 @@ func (m configModel) viewConfirmDelete(theme tui.Theme) string {
 	}
 	prompt := fmt.Sprintf("Delete %s? This cannot be undone within the editor.\n\ny/enter — delete\nn/esc  — cancel", subject)
 	if m.confirmKind == confirmDiscardAll {
-		prompt = fmt.Sprintf("Discard %s? The config will revert to its pre-edit state.\n\ny/enter — discard\nn/esc  — cancel", subject)
+		prompt = fmt.Sprintf("Discard %s? Edits in the current section are reverted and every pending change (config keys and provider keys) is dropped.\n\ny/enter — discard\nn/esc  — cancel", subject)
 	}
 	body := theme.Body.Render(prompt)
 	return lipgloss.NewStyle().Padding(1, 2).Render(body)
@@ -886,7 +1088,7 @@ func (m configModel) viewReview(theme tui.Theme) string {
 	b.WriteString(theme.Title.Render("Review changes"))
 	b.WriteString("\n\n")
 
-	if len(m.changes) == 0 && !m.agentsDirty {
+	if len(m.changes) == 0 && !m.agentsDirty && len(m.keyChanges) == 0 {
 		b.WriteString(theme.Body.Render("No changes to save."))
 	}
 
@@ -902,8 +1104,123 @@ func (m configModel) viewReview(theme tui.Theme) string {
 		fmt.Fprintf(&b, "%s %s = %s\n", theme.Dimmed.Render("•"), theme.Body.Render(k), m.changes[k])
 	}
 
+	// Provider-key ops are listed by name only — the typed key is never
+	// rendered (NCTL-45).
+	keyNames := make([]string, 0, len(m.keyChanges))
+	for name := range m.keyChanges {
+		keyNames = append(keyNames, name)
+	}
+	sort.Strings(keyNames)
+	for _, name := range keyNames {
+		fmt.Fprintf(&b, "%s provider key %s: set/rotate via nenya secret writer\n",
+			theme.Dimmed.Render("•"), theme.Body.Render(name))
+	}
+
 	b.WriteString("\n")
 	b.WriteString(theme.Body.Render("s/enter — save and apply\nD      — discard all changes (asks)\nn/esc  — back to editing"))
+	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
+}
+
+// viewProviders renders the provider key-status screen (NCTL-45): set/unset
+// and the key source — never the value. Pending key changes are flagged so
+// the user sees what will be applied on save.
+func (m configModel) viewProviders(theme tui.Theme) string {
+	title := theme.Title.Render("Provider API Keys")
+	subtitle := theme.Dimmed.Render("enter — set or rotate the selected provider's key · esc — back")
+
+	body := lipgloss.JoinVertical(lipgloss.Top,
+		title,
+		"",
+		subtitle,
+		"",
+		m.providersView.View(),
+	)
+
+	if m.validationMsg != "" {
+		body = lipgloss.JoinVertical(lipgloss.Top,
+			body,
+			"",
+			theme.Error.Render(m.validationMsg),
+		)
+	}
+
+	return lipgloss.NewStyle().Padding(1, 2).Render(body)
+}
+
+// updateProvidersContent refreshes the providers rows viewport (NCTL-45).
+func (m *configModel) updateProvidersContent() {
+	m.providersView.SetContent(m.renderProviderRows())
+}
+
+// scrollProviders keeps the provider cursor visible (mirrors scrollKeys) and
+// refreshes the viewport content, matching its sibling scroll helpers.
+func (m *configModel) scrollProviders() {
+	visible := m.providersView.Height
+	if visible <= 0 {
+		return
+	}
+	half := visible / 2
+	if m.providerCursor < half {
+		m.providersView.YOffset = 0
+	} else if m.providerCursor > len(m.providerRows)-1-half {
+		m.providersView.YOffset = len(m.providerRows) - visible
+		if m.providersView.YOffset < 0 {
+			m.providersView.YOffset = 0
+		}
+	} else {
+		m.providersView.YOffset = m.providerCursor - half
+	}
+	m.updateProvidersContent()
+}
+
+// renderProviderRows renders the provider rows only — the viewport content.
+// Status shows set/unset and the source; key values are never rendered.
+func (m configModel) renderProviderRows() string {
+	theme := tui.Current()
+	var b strings.Builder
+	if len(m.providerRows) == 0 {
+		b.WriteString(theme.Body.Render("No providers configured."))
+	}
+	for i, row := range m.providerRows {
+		prefix := "  "
+		if i == m.providerCursor {
+			prefix = "● "
+		}
+		status := theme.Error.Render("no key set")
+		if row.KeySet {
+			status = theme.Success.Render("key set (" + row.Source + ")")
+		}
+		display := sanitizeConfigName(row.Name)
+		if display == "" {
+			display = "(unprintable name)"
+		}
+		line := fmt.Sprintf("%s%-22s %s", prefix, display, status)
+		if _, pending := m.keyChanges[row.Name]; pending {
+			line += "  " + theme.Dimmed.Render("[pending change]")
+		}
+		b.WriteString(theme.Body.Render(line))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// viewProviderEdit renders the masked key input for one provider (NCTL-45).
+// nenya enforces key strength at apply time (a weak key is refused by the
+// single writer after the editor exits), and the key transits to nenya as a
+// command argument (visible in the process list while it runs) — both
+// documented here so the user knows the boundaries before typing.
+func (m configModel) viewProviderEdit(theme tui.Theme) string {
+	var b strings.Builder
+	b.WriteString(theme.Title.Render("Set key: " + m.editingProvider))
+	b.WriteString("\n\n")
+	b.WriteString(theme.Body.Render("Applied through nenya's single writer on save; nenya refuses weak keys.\nThe key is masked while typing, never displayed, and passed to nenya\nas a command argument (visible in the process list while it runs).\n\n"))
+	b.WriteString(theme.InputFocused.Render(m.keyInput.View()))
+	if m.validationMsg != "" {
+		b.WriteString("\n\n")
+		b.WriteString(theme.Error.Render(m.validationMsg))
+	}
+	b.WriteString("\n\n")
+	b.WriteString(theme.Dimmed.Render("enter — record the key\nesc — cancel"))
 	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
 }
 
@@ -1057,17 +1374,192 @@ func (m *configModel) updateKeysContent() {
 	m.keysView.SetContent(m.renderKeys())
 }
 
-func isSectionObject(v *hujson.Value) bool {
-	_, ok := v.Value.(*hujson.Object)
-	return ok
-}
-
 // EditorResult is the set of changes the user made. It carries no file paths:
 // the caller applies each change through nenya's single writer, which owns the
 // target file and the merge.
 type EditorResult struct {
 	// Changes maps a dotted config key to its raw JSON value.
 	Changes map[string]string
+	// KeyChanges maps a provider name to a new API key typed on the
+	// providers screen. The caller applies each through nenya's single
+	// writer; the editor never writes secrets itself (NCTL-45).
+	KeyChanges map[string]string
+}
+
+// buildProviderRows assembles the providers screen rows from the effective
+// document's providers section, merged with secrets-file key presence passed
+// by the caller (NENYA-166 references and config-level api_key literals are
+// detected from the document itself; secrets.json names come in via
+// keyStatus). Values are never read — only presence.
+func buildProviderRows(cfg *hujson.Value, keyStatus []ProviderKeyStatus) []ProviderKeyStatus {
+	secretSet := make(map[string]ProviderKeyStatus, len(keyStatus))
+	for _, s := range keyStatus {
+		secretSet[s.Name] = s
+	}
+
+	providersValue, ok := jsonc.GetField(cfg, "providers")
+	if !ok {
+		return nil
+	}
+	obj, ok := providersValue.Value.(*hujson.Object)
+	if !ok {
+		return nil
+	}
+
+	rows := make([]ProviderKeyStatus, 0, len(obj.Members))
+	type rowSort struct {
+		row       ProviderKeyStatus
+		sanitized string
+	}
+	sorted := make([]rowSort, 0, len(obj.Members))
+	for i := range obj.Members {
+		raw := jsonc.MemberName(&obj.Members[i])
+		display := sanitizeConfigName(raw)
+		if display == "" {
+			// Nothing safely renderable: keep the row so the operator can
+			// see the provider exists; renderProviderRows shows a
+			// placeholder and edit entry refuses control-bearing names.
+			display = "(unprintable name)"
+		}
+		row := ProviderKeyStatus{Name: raw}
+		if st, ok := secretSet[raw]; ok && st.KeySet {
+			row.KeySet = true
+			row.Source = st.Source
+		}
+		applyConfigKeySource(&row, &obj.Members[i].Value)
+		sorted = append(sorted, rowSort{row: row, sanitized: display})
+	}
+	// Deterministic order by the display name, raw name as tiebreaker.
+	sort.Slice(sorted, func(x, y int) bool {
+		if sorted[x].sanitized != sorted[y].sanitized {
+			return sorted[x].sanitized < sorted[y].sanitized
+		}
+		return sorted[x].row.Name < sorted[y].row.Name
+	})
+	for _, s := range sorted {
+		rows = append(rows, s.row)
+	}
+	return rows
+}
+
+// applyConfigKeySource marks the row as set when the provider entry carries a
+// config-level api_key, classifying env:/file: references (NCTL-45). Presence
+// is what the screen reports, never the value. The api_key member is read as
+// a hujson.Literal directly: string literals decode via Literal.String()
+// (raw literal text keeps JSON quotes), and non-string kinds are not
+// credentials.
+//
+// Two contract realities shape this: `nenya describe` redacts every set
+// api_key to the [REDACTED] sentinel (so a literal ref is never observable in
+// the effective document — the ref branch is defensive), and nenya's
+// ResolveProviders uses ONLY secrets.provider_keys for the runtime key — so a
+// secrets.json entry (row.Source already set) always wins the label over a
+// config-level key.
+func applyConfigKeySource(row *ProviderKeyStatus, provider *hujson.Value) {
+	apiKey, ok := jsonc.GetNestedField(provider, []string{"api_key"})
+	if !ok {
+		return
+	}
+	// Only a string literal carries a credential; numbers, bools, null,
+	// objects and arrays are not keys.
+	lit, isLit := apiKey.Value.(hujson.Literal)
+	if !isLit || lit.Kind() != '"' {
+		return
+	}
+	// Decode the literal: the raw text keeps JSON quotes, which would defeat
+	// the sentinel/ref comparisons below.
+	v := lit.String()
+	if v == "" {
+		return
+	}
+	row.KeySet = true
+	if row.Source != "" {
+		// A secrets.json key is nenya's runtime source of truth; keep its
+		// label even when a config-level api_key also exists.
+		return
+	}
+	switch {
+	case v == redactedSentinel:
+		// Same label as the default arm today (nenya's runtime key comes from
+		// secrets either way); kept separate so a future sentinel-specific
+		// source ("describe redacted") doesn't have to untangle the default.
+		row.Source = "config"
+	case strings.HasPrefix(v, "env:") || strings.HasPrefix(v, "file:"):
+		row.Source = strings.SplitN(v, ":", 2)[0] + " ref"
+	default:
+		row.Source = "config"
+	}
+}
+
+// redactedSentinel mirrors nenya describe's credential redaction marker
+// (netutil.RedactedUserinfoSentinel): a set api_key shows up as exactly this
+// value in the effective document.
+const redactedSentinel = "[REDACTED]"
+
+// sanitizeConfigName strips terminal control sequences and codepoints from
+// config-derived names so a hostile config cannot inject output into the TUI:
+// ESC sequences (CSI 0x40–0x7E finals, OSC bodies through BEL/ST), C0
+// controls, DEL, and C1 codepoints U+0080–U+009F. Valid UTF-8 passes through
+// untouched (runes are decoded, so multi-byte sequences — whose continuation
+// bytes live in 0x80–0xBF — are never corrupted). Names only ever feed the
+// display and the --provider argument; a name the sanitizer changes is never
+// silently re-keyed (updateProviders warns and refuses).
+func sanitizeConfigName(name string) string {
+	var b strings.Builder
+	for i := 0; i < len(name); {
+		c := name[i]
+		if c == '\x1b' {
+			if i+1 < len(name) && name[i+1] == '[' {
+				i += skipCSI(name, i)
+				continue
+			}
+			if i+1 < len(name) && name[i+1] == ']' {
+				i += skipOSC(name, i)
+				continue
+			}
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(name[i:])
+		if r == utf8.RuneError && size == 1 {
+			// Invalid UTF-8 byte: drop it (jsonc documents are valid UTF-8;
+			// this is hostile-input defense).
+			i++
+			continue
+		}
+		if r <= 0x1f || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			i += size
+			continue
+		}
+		b.WriteString(name[i : i+size])
+		i += size
+	}
+	return b.String()
+}
+
+// skipCSI swallows a CSI sequence (ESC [ … final byte 0x40–0x7E) starting at
+// the ESC and returns the number of bytes consumed.
+func skipCSI(name string, esc int) int {
+	for i := esc + 2; i < len(name); i++ {
+		if name[i] >= 0x40 && name[i] <= 0x7e {
+			return i - esc + 1
+		}
+	}
+	return len(name) - esc
+}
+
+// skipOSC swallows an OSC body (ESC ] … BEL or ESC-\) starting at the ESC and
+// returns the number of bytes consumed.
+func skipOSC(name string, esc int) int {
+	for i := esc + 2; i < len(name); i++ {
+		switch {
+		case name[i] == '\x07':
+			return i - esc + 1
+		case name[i] == '\x1b' && i+1 < len(name) && name[i+1] == '\\':
+			return i - esc + 2
+		}
+	}
+	return len(name) - esc
 }
 
 func (m *configModel) startEditAgent() {
@@ -1116,14 +1608,17 @@ func (m configModel) renderKeys() string {
 // RunConfigEditor runs the interactive editor over the effective config. The
 // caller supplies the authoritative effective document (from
 // `nenya describe --json`), so the editor never reads or merges config files
-// itself.
-func RunConfigEditor(effective []byte) (*EditorResult, bool, error) {
+// itself, plus the secrets-file provider-key status for the providers screen
+// (names and presence only — never values). Provider-key changes come back in
+// EditorResult.KeyChanges for the caller to apply through nenya's single
+// writer.
+func RunConfigEditor(effective []byte, keyStatus []ProviderKeyStatus) (*EditorResult, bool, error) {
 	cfg, err := jsonc.ParseDoc(effective)
 	if err != nil {
 		return nil, false, err
 	}
 
-	m := newConfigModel(cfg, effective)
+	m := newConfigModel(cfg, effective, keyStatus)
 	m.resetCursor()
 
 	p := tea.NewProgram(&m, tea.WithAltScreen())
@@ -1165,7 +1660,11 @@ func (m *configModel) result() (*EditorResult, error) {
 	if m.agentsModeAuto != m.autoAgentsOriginal {
 		changes["discovery.auto_agents"] = strconv.FormatBool(m.agentsModeAuto)
 	}
-	return &EditorResult{Changes: changes}, nil
+	keyChanges := make(map[string]string, len(m.keyChanges))
+	for k, v := range m.keyChanges {
+		keyChanges[k] = v
+	}
+	return &EditorResult{Changes: changes, KeyChanges: keyChanges}, nil
 }
 
 func trunc(s string, max int) string {

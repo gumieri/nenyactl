@@ -46,6 +46,12 @@ func memberName(m *hujson.ObjectMember) string {
 	return m.Name.Value.(hujson.Literal).String()
 }
 
+// MemberName returns an object member's key. Exported for callers that walk
+// members directly (buildProviderRows) rather than by key lookup.
+func MemberName(m *hujson.ObjectMember) string {
+	return memberName(m)
+}
+
 func GetObject(v *hujson.Value) (*hujson.Object, bool) {
 	obj, ok := v.Value.(*hujson.Object)
 	return obj, ok
