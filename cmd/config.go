@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/gumieri/nenyactl/internal/config"
 	"github.com/gumieri/nenyactl/internal/detect"
@@ -95,28 +96,57 @@ func bootstrapConfig(dir string) error {
 var configEditCmd = &cobra.Command{
 	Use:   "edit",
 	Short: "Edit Nenya configuration",
-	Long: `Open an interactive TUI editor for the Nenya configuration file.
+	Long: `Open an interactive TUI editor for the Nenya configuration file, or
+apply changes non-interactively with --set (repeatable; dotted keys;
+values use the same literal rules as the TUI — bare strings are
+quoted, true/false/null and numbers pass through).
+
+--print-diff renders the pending change set without writing anything.
+With --set it shows what would be applied; after an interactive
+session it shows what the session changed and skips the write.
 
 Detects whether Nenya is installed as bare-metal or as a container.
 Use --dir to override automatic detection.`,
 	RunE: runConfigEdit,
 }
 
-var configEditDir string
+var (
+	configEditDir  string
+	configEditSet  []string
+	configEditDiff bool
+)
 
 func init() {
 	configEditCmd.Flags().StringVar(&configEditDir, "dir", "", "Config root or container directory (auto-detected)")
+	configEditCmd.Flags().StringArrayVar(&configEditSet, "set", nil, "set a config key non-interactively: --set key=value (dotted key; repeatable, last wins; same literal rules as the TUI plus local validation: malformed JSON rejected, non-JSON numbers quoted)")
+	configEditCmd.Flags().BoolVar(&configEditDiff, "print-diff", false, "print the pending change set without writing")
 }
 
+// describeForEdit is the Describe seam runConfigEdit uses, stubbed in tests
+// to prove the --set path never requires a live daemon (NCTL-48 review).
+var describeForEdit = func(ctx context.Context, client *nenya.Client) (nenya.Description, error) {
+	return client.Describe(ctx)
+}
+
+// resolveEditDirFn is the resolution seam runConfigEdit uses, stubbed in
+// tests to avoid host detection (NCTL-48 review).
+var resolveEditDirFn = resolveEditDir
+
 func runConfigEdit(cmd *cobra.Command, args []string) error {
-	res, err := resolveEditDir(cmd.Context())
+	res, err := resolveEditDirFn(cmd.Context())
 	if err != nil {
 		return err
 	}
 
 	client := res.Contract()
 
-	desc, err := client.Describe(cmd.Context())
+	// Non-interactive --set path runs before Describe: a pure --print-diff
+	// dry run must not require a live daemon (NCTL-48 review).
+	if len(configEditSet) > 0 {
+		return runConfigSetFlags(cmd, client)
+	}
+
+	desc, err := describeForEdit(cmd.Context(), client)
 	if err != nil {
 		return fmt.Errorf("read effective config via `nenya describe --json`: %w", err)
 	}
@@ -134,6 +164,19 @@ func runConfigEdit(cmd *cobra.Command, args []string) error {
 
 	if !changed || (len(result.Changes) == 0 && len(result.KeyChanges) == 0) {
 		fmt.Println(infoStyle.Render("›"), "No changes made")
+		return nil
+	}
+
+	// --print-diff after an interactive session shows what the session
+	// changed and deliberately skips the write (NCTL-48).
+	if configEditDiff {
+		if len(result.Changes) > 0 {
+			fmt.Print(config.RenderChanges(result.Changes))
+		}
+		for _, op := range result.ProviderKeys() {
+			fmt.Printf("provider key %s: set/rotate via nenya secret writer\n", op.Provider)
+		}
+		fmt.Println(dimStyle.Render("Dry run: nothing written (--print-diff)"))
 		return nil
 	}
 
@@ -161,6 +204,65 @@ func resolveEditDir(ctx context.Context) (dirResolution, error) {
 		return dirResolution{}, err
 	}
 	return detectedResolution(info), nil
+}
+
+// parseSetFlags parses repeatable --set key=value flags into a change set.
+// Values go through config.ParseConfigValue, the same literal rules as the
+// TUI editor, so flags and TUI produce identical records (NCTL-48). Dotted
+// keys must have only non-empty segments — the TUI can only produce real
+// config keys, and the flag path should not be looser.
+func parseSetFlags(sets []string) (map[string]string, error) {
+	changes := make(map[string]string, len(sets))
+	for _, s := range sets {
+		key, value, found := strings.Cut(s, "=")
+		if !found {
+			return nil, fmt.Errorf("--set expects key=value, got %q (missing =)", s)
+		}
+		key = strings.TrimSpace(key)
+		if err := validateDottedKey(key); err != nil {
+			return nil, fmt.Errorf("--set %q: %w", s, err)
+		}
+		literal, err := config.ParseConfigValue(value)
+		if err != nil {
+			return nil, fmt.Errorf("--set %q: %w", s, err)
+		}
+		changes[key] = literal
+	}
+	return changes, nil
+}
+
+// validateDottedKey rejects keys with empty dot-separated segments (a..b, .a,
+// a.) and any whitespace inside a segment, which nenya's writer would
+// otherwise persist or reject opaquely (NCTL-48 review). Surrounding
+// whitespace is already trimmed by the caller.
+func validateDottedKey(key string) error {
+	if key == "" {
+		return fmt.Errorf("empty key")
+	}
+	for _, seg := range strings.Split(key, ".") {
+		if seg == "" {
+			return fmt.Errorf("key %q has an empty dotted segment", key)
+		}
+		if strings.IndexFunc(seg, unicode.IsSpace) >= 0 {
+			return fmt.Errorf("key %q contains whitespace inside a segment", key)
+		}
+	}
+	return nil
+}
+
+// runConfigSetFlags applies --set changes non-interactively; --print-diff
+// renders the change set instead of writing (NCTL-48).
+func runConfigSetFlags(cmd *cobra.Command, client *nenya.Client) error {
+	changes, err := parseSetFlags(configEditSet)
+	if err != nil {
+		return err
+	}
+	if configEditDiff {
+		fmt.Print(config.RenderChanges(changes))
+		fmt.Println(dimStyle.Render("Dry run: nothing written (--print-diff)"))
+		return nil
+	}
+	return applyConfigChanges(cmd, client, &config.EditorResult{Changes: changes})
 }
 
 // secretsDirFor resolves the secrets directory. For a bare-metal config root,

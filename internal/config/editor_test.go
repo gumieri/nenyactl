@@ -379,3 +379,47 @@ func TestAgentsFromEffectiveEdgeCases(t *testing.T) {
 		}
 	})
 }
+
+func TestParseConfigValueTable(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"empty", "", `""`, false},
+		{"bare string", "hello world", `"hello world"`, false},
+		{"bool", "TRUE", "true", false},
+		{"number", "42", "42", false},
+		{"float", "1.5", "1.5", false},
+		{"negative", "-3", "-3", false},
+		{"inf quoted", "Inf", `"Inf"`, false},
+		{"leading zero quoted", "007", `"007"`, false},
+		{"hex float quoted", "0x1p2", `"0x1p2"`, false},
+		{"underscore quoted", "1_000", `"1_000"`, false},
+		{"quoted string", `"abc"`, `"abc"`, false},
+		{"object", `{"x":1}`, `{"x":1}`, false},
+		{"array", `[1,2]`, `[1,2]`, false},
+		{"malformed object", `{"x":1`, "", true},
+		{"malformed array", `[1,`, "", true},
+		{"malformed quoted string", `"abc`, "", true},
+		{"null", "NULL", "null", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseConfigValue(tc.in)
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("ParseConfigValue(%q) = %q, want an error", tc.in, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseConfigValue(%q): %v", tc.in, err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseConfigValue(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

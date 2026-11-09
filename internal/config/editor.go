@@ -1095,12 +1095,7 @@ func (m configModel) viewReview(theme tui.Theme) string {
 	if m.agentsDirty {
 		b.WriteString(theme.Body.Render("• agents: rewritten per the edited list\n"))
 	}
-	keys := make([]string, 0, len(m.changes))
-	for k := range m.changes {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
+	for _, k := range sortedChangeKeys(m.changes) {
 		fmt.Fprintf(&b, "%s %s = %s\n", theme.Dimmed.Render("•"), theme.Body.Render(k), m.changes[k])
 	}
 
@@ -1665,6 +1660,79 @@ func (m *configModel) result() (*EditorResult, error) {
 		keyChanges[k] = v
 	}
 	return &EditorResult{Changes: changes, KeyChanges: keyChanges}, nil
+}
+
+// ParseConfigValue renders a raw flag value as a JSON literal using the same
+// rules as the TUI value editor: bare strings are quoted, true/false/null
+// pass through (NCTL-48). Unlike the TUI, passthrough values (quoted strings,
+// objects, arrays, numbers) are validated here — a malformed literal fails
+// locally before any write instead of silently persisting as a string via
+// nenya's lenient fallback. Bare strings are JSON-escaped (control characters
+// and invalid UTF-8 included), so the result is always a valid JSON literal.
+func ParseConfigValue(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return `""`, nil
+	}
+	l := strings.ToLower(trimmed)
+	switch l {
+	case "true", "false", "null":
+		return l, nil
+	}
+	switch trimmed[0] {
+	case '"', '{', '[':
+		if !json.Valid([]byte(trimmed)) {
+			return "", fmt.Errorf("value %q looks like JSON (starts with %q) but does not parse", raw, trimmed[0])
+		}
+		return trimmed, nil
+	}
+	if isJSONNumber(trimmed) {
+		return trimmed, nil
+	}
+	// Bare string: JSON-escape it (handles control characters and invalid
+	// UTF-8 that strconv.Quote would escape in non-JSON \x form).
+	encoded, err := json.Marshal(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("value %q cannot be encoded as a JSON string: %w", raw, err)
+	}
+	return string(encoded), nil
+}
+
+// isJSONNumber reports whether s is a valid JSON number: strconv.ParseFloat
+// accepts Inf/NaN, hex-float, underscore, and leading-zero forms that JSON
+// rejects, so the parsed value is cross-checked with json.Valid (NCTL-48
+// review).
+func isJSONNumber(s string) bool {
+	if !json.Valid([]byte(s)) {
+		return false
+	}
+	_, err := strconv.ParseFloat(s, 64)
+	return err == nil
+}
+
+// sortedChangeKeys returns a change set's keys in stable order — shared by
+// the TUI review screen and the --print-diff renderer.
+func sortedChangeKeys(changes map[string]string) []string {
+	keys := make([]string, 0, len(changes))
+	for k := range changes {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// RenderChanges renders a pending change set as plain sorted `key = value`
+// lines — the non-interactive equivalent of the TUI review screen (NCTL-48).
+// Values are the JSON literals that would be applied, exactly as recorded.
+func RenderChanges(changes map[string]string) string {
+	if len(changes) == 0 {
+		return "No changes.\n"
+	}
+	var b strings.Builder
+	for _, k := range sortedChangeKeys(changes) {
+		fmt.Fprintf(&b, "%s = %s\n", k, changes[k])
+	}
+	return b.String()
 }
 
 func trunc(s string, max int) string {
