@@ -47,14 +47,18 @@ func init() {
 }
 
 func runUp(cmd *cobra.Command, args []string) error {
-	ctx := cmd.Context()
+	return runUpWith(cmd.Context(), upDir, upWait)
+}
 
-	res, err := ensureDeployment(ctx, upDir)
+// runUpWith is runUp's implementation, callable without a cobra command so
+// the doctor's fix prompt shares one code path (NCTL-47).
+func runUpWith(ctx context.Context, dir string, wait time.Duration) error {
+	res, err := ensureDeployment(ctx, dir)
 	if err != nil {
 		return err
 	}
 
-	if err := upDeployment(ctx, res, statusHTTPClient, upWait); err != nil {
+	if err := upDeployment(ctx, res, statusHTTPClient, wait); err != nil {
 		return err
 	}
 

@@ -1,13 +1,18 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/gumieri/nenyactl/internal/contract"
 	"github.com/gumieri/nenyactl/internal/detect"
@@ -19,22 +24,40 @@ import (
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
 	Short: "Diagnose the nenya seam",
+	// RunE errors (failed checks, interrupted watches) are results, not
+	// usage mistakes — the usage block would only add noise.
+	SilenceUsage: true,
 	Long: `Check the installed nenya binary, contract compatibility, the resolved
 config and secrets, provider keys, port availability, and service state, and
 report an actionable fix for anything that is wrong.
 
 Checks that need a running gateway or a provider key are reported as warnings,
 not failures, so doctor is safe to run before the service is started. Exits
-non-zero when a check fails, so it can gate scripts.`,
+non-zero when a check fails, so it can gate scripts.
+
+With --watch, the checks re-run every --interval until every check passes or
+you interrupt with ctrl-c — a live repair loop instead of a static report
+(--interval applies only with --watch; minimum 1s).
+
+Checks whose fix is a nenyactl-owned command (currently 'nenyactl up') offer
+to run it directly with a [y/N] prompt (one-shot mode only — watch never
+prompts; EOF on stdin counts as "no"). Doctor never shells out to arbitrary
+commands.`,
 	Args: cobra.NoArgs,
 	RunE: runDoctor,
 }
 
-var doctorDir string
+var (
+	doctorDir      string
+	doctorWatch    bool
+	doctorInterval time.Duration
+)
 
 func init() {
 	rootCmd.AddCommand(doctorCmd)
 	doctorCmd.Flags().StringVar(&doctorDir, "dir", "", "Deployment root (default: auto-detect)")
+	doctorCmd.Flags().BoolVar(&doctorWatch, "watch", false, "re-run the checks on an interval until all pass or ctrl-c")
+	doctorCmd.Flags().DurationVar(&doctorInterval, "interval", 5*time.Second, "re-run interval for --watch (minimum 1s)")
 }
 
 // checkStatus is the outcome of a single doctor check.
@@ -57,36 +80,306 @@ func (s checkStatus) String() string {
 	}
 }
 
-// checkResult is one diagnosed item.
+// checkResult is one diagnosed item. Fix is the human suggestion; Action, when
+// set, is a nenyactl-owned command the doctor can offer to run itself (NCTL-47)
+// — doctor never shells out to arbitrary commands.
 type checkResult struct {
 	Name   string
 	Status checkStatus
 	Detail string
 	Fix    string
+	Action doctorAction
 }
+
+// doctorAction enumerates the internal fixes doctor can offer to run.
+type doctorAction int
+
+const (
+	actionNone doctorAction = iota
+	actionUp                // `nenyactl up`: ensure the deployment and wait for /healthz
+)
+
+// actionCommand is the user-visible command each action corresponds to.
+func actionCommand(a doctorAction) string {
+	switch a {
+	case actionUp:
+		return "nenyactl up"
+	default:
+		return ""
+	}
+}
+
+// runDoctorAction executes an internal fix by invoking the real command path,
+// so the doctor's fix and the standalone command share one implementation
+// (NCTL-47). dir and wait come from the caller's flag state.
+func runDoctorAction(ctx context.Context, dir string, wait time.Duration, a doctorAction) error {
+	switch a {
+	case actionUp:
+		return runUpWith(ctx, dir, wait)
+	default:
+		return fmt.Errorf("no runnable action %d", int(a))
+	}
+}
+
+// printResults prints every check and returns the failure count.
+func printResults(results []checkResult) int {
+	for _, r := range results {
+		printCheck(r)
+	}
+	return countFailed(results)
+}
+
+// resolveLifecycleDirFn and diagnoseFn are the doctor's host-interaction
+// seams, overridden in tests so the repair flow can run hermetically
+// (NCTL-47 review).
+var (
+	resolveLifecycleDirFn = resolveLifecycleDir
+	diagnoseFn            = diagnose
+	// runDoctorActionFn is the fix-execution seam (tests intercept the repair
+	// without touching the host).
+	runDoctorActionFn = runDoctorAction
+)
 
 func runDoctor(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
-	res, err := resolveLifecycleDir(ctx, doctorDir)
+	if !doctorWatch && cmd.Flags().Changed("interval") {
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "note: --interval applies only with --watch")
+	}
+	res, err := resolveLifecycleDirFn(ctx, doctorDir)
 	if err != nil {
+		// The deployment-failure fixes span binary install (network,
+		// state-changing) and manual steps; they stay display-only —
+		// only idempotent internal fixes (actionUp) are ever offered.
 		printCheck(checkResult{Name: "deployment", Status: checkFail, Detail: err.Error(), Fix: deploymentFix(err)})
 		return fmt.Errorf("deployment: %w", err)
 	}
 
-	results := diagnose(ctx, res, statusHTTPClient)
-	var failed int
-	for _, r := range results {
-		printCheck(r)
-		if r.Status == checkFail {
-			failed++
+	if doctorWatch {
+		if effectiveDoctorInterval() != doctorInterval {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "note: --interval %s is below the 1s floor; using %s\n", doctorInterval, effectiveDoctorInterval())
+		}
+		return runDoctorWatch(ctx, res)
+	}
+
+	refresh := func() []checkResult { return diagnoseFn(ctx, res, statusHTTPClient) }
+	results := refresh()
+	failed := printResults(results)
+
+	// NCTL-47: actionable checks (fails, and warnings whose fix is
+	// nenyactl-owned) are offered interactively; each accepted fix re-runs
+	// the real command.
+	repaired := false
+	if failed > 0 || anyActionable(results) {
+		var fixed []checkResult
+		repaired, fixed, err = offerFixes(ctx, cmd.InOrStdin(), cmd.ErrOrStderr(),
+			func(ctx context.Context, a doctorAction) error {
+				// res.Path, not doctorDir: the fix must act on the exact
+				// installation doctor diagnosed (no re-detection window).
+				return runDoctorActionFn(ctx, res.Path, upWait, a)
+			}, results, refresh)
+		if err != nil {
+			return err
+		}
+		if repaired {
+			// Reuse offerFixes' post-fix diagnosis: no second describe/health
+			// round-trip.
+			results = fixed
 		}
 	}
+
+	// After an accepted repair, the exit status reflects post-fix reality
+	// instead of the pre-fix snapshot (results came from offerFixes' final
+	// refresh — no extra diagnose run).
+	if repaired {
+		fmt.Println()
+		failed = printResults(results)
+		if failed == 0 {
+			fmt.Println("all checks passed")
+			return nil
+		}
+	}
+
 	fmt.Println()
 	if failed > 0 {
 		return fmt.Errorf("%d check(s) failed", failed)
 	}
 	fmt.Println("all checks passed")
 	return nil
+}
+
+// runDoctorWatch re-renders the diagnosis every interval until every check
+// passes (success exit) or the context is canceled (ctrl-c/SIGTERM), then
+// reports the last run's status (NCTL-47).
+func runDoctorWatch(ctx context.Context, res dirResolution) error {
+	interval := effectiveDoctorInterval()
+	// ctrl-c and SIGTERM end the loop cleanly so the final status prints.
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	clear := stdoutIsTerminal()
+	paint := func(results []checkResult, failed int) {
+		if clear {
+			fmt.Print("\x1b[2J\x1b[H") // clear screen, cursor home
+		}
+		fmt.Printf("doctor --watch · every %s · %s\n\n", interval, time.Now().Format("15:04:05"))
+		for _, r := range results {
+			printCheck(r)
+		}
+		if failed == 0 {
+			fmt.Println("\nall checks passed")
+		} else {
+			fmt.Printf("\n%d check(s) failing — re-running in %s (ctrl-c to stop)\n", failed, interval)
+		}
+	}
+	failed, canceled := doctorWatchLoop(ctx, interval, func() []checkResult {
+		return diagnose(ctx, res, statusHTTPClient)
+	}, paint, waitInterval)
+	if canceled {
+		return fmt.Errorf("interrupted with %d check(s) still failing", failed)
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d check(s) failed", failed)
+	}
+	return nil
+}
+
+// effectiveDoctorInterval clamps the configured watch interval to the 1s
+// floor (NCTL-47).
+func effectiveDoctorInterval() time.Duration {
+	if doctorInterval < time.Second {
+		return time.Second
+	}
+	return doctorInterval
+}
+
+// stdoutIsTerminal reports whether stdout is a character device (a terminal);
+// ANSI clear-screen codes are only emitted then.
+func stdoutIsTerminal() bool {
+	info, err := os.Stdout.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+// doctorWatchLoop runs the diagnosis, paints each run, and waits interval
+// between runs until ctx is canceled or a run has zero failures. It returns
+// the last run's failure count and whether cancellation ended the loop
+// (NCTL-47): failures at cancellation may be diagnose artifacts, so the
+// caller reports them as interrupted. run and wait are injectable for tests;
+// wait reports whether the full interval elapsed (false = canceled).
+func doctorWatchLoop(ctx context.Context, interval time.Duration, run func() []checkResult, paint func([]checkResult, int), wait func(context.Context, time.Duration) bool) (int, bool) {
+	for {
+		results := run()
+		failed := countFailed(results)
+		paint(results, failed)
+		if failed == 0 {
+			return 0, false
+		}
+		if ctx.Err() != nil {
+			return failed, true
+		}
+		if !wait(ctx, interval) {
+			return failed, true
+		}
+	}
+}
+
+// countFailed returns the number of checkFail entries.
+func countFailed(results []checkResult) int {
+	var failed int
+	for _, r := range results {
+		if r.Status == checkFail {
+			failed++
+		}
+	}
+	return failed
+}
+
+// anyActionable reports whether any check carries a nenyactl-owned fix worth
+// offering, even when nothing hard-fails (e.g. the pre-`up` state where the
+// actionable checks are warnings) (NCTL-47).
+func anyActionable(results []checkResult) bool {
+	for _, r := range results {
+		if isActionable(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// waitInterval sleeps interval or until ctx is canceled; reports whether the
+// full interval elapsed.
+func waitInterval(ctx context.Context, interval time.Duration) bool {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// offerFixes prompts for checks whose fix is a nenyactl-owned command and
+// runs accepted fixes through run (NCTL-47). Only internal actions are
+// offered — doctor never shells out to arbitrary commands. Each action is
+// offered at most once per invocation; after an accepted fix the diagnosis is
+// refreshed via refresh, so later prompts reflect post-fix state and a fix
+// that repaired several checks never re-prompts. A declined check drops out
+// of consideration; EOF or a read error declines and stops prompting (doctor's
+// exit code still gates scripts). It reports whether any fix ran and returns
+// the final diagnosis (refreshed after the last accepted fix) so callers can
+// reuse it instead of re-running the checks.
+func offerFixes(ctx context.Context, in io.Reader, out io.Writer, run func(context.Context, doctorAction) error, initial []checkResult, refresh func() []checkResult) (bool, []checkResult, error) {
+	// Work on a copy: declines mutate the working set, and the caller's
+	// initial slice must stay intact.
+	results := make([]checkResult, len(initial))
+	copy(results, initial)
+	reader := bufio.NewReader(in)
+	repaired := false
+	offered := map[doctorAction]bool{}
+	for {
+		var pending *checkResult
+		var pendingIdx int
+		for i := range results {
+			r := &results[i]
+			if !isActionable(*r) || offered[r.Action] {
+				continue
+			}
+			pending = r
+			pendingIdx = i
+			break
+		}
+		if pending == nil {
+			return repaired, results, nil
+		}
+		offered[pending.Action] = true
+
+		_, _ = fmt.Fprintf(out, "run: %s? [y/N] ", actionCommand(pending.Action))
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			// EOF or a read failure (including a partial line with no
+			// newline): decline and stop prompting.
+			return repaired, results, nil
+		}
+		answer := strings.ToLower(strings.TrimSpace(line))
+		if answer != "y" && answer != "yes" {
+			// Declined: drop this check so other pending actions still
+			// prompt.
+			results = append(results[:pendingIdx], results[pendingIdx+1:]...)
+			continue
+		}
+		if err := run(ctx, pending.Action); err != nil {
+			return repaired, results, fmt.Errorf("fix (%s): %w", actionCommand(pending.Action), err)
+		}
+		repaired = true
+		results = refresh()
+	}
+}
+
+// isActionable reports whether a check's fix is a nenyactl-owned command worth
+// offering: actionable status (fail or warn) plus a known internal action
+// (NCTL-47). Shared by the offer gates so they stay in lockstep.
+func isActionable(r checkResult) bool {
+	return r.Action != actionNone && (r.Status == checkFail || r.Status == checkWarn)
 }
 
 func printCheck(r checkResult) {
@@ -147,7 +440,7 @@ func checkConfig(res dirResolution, descErr error, haveDesc bool) checkResult {
 		// Directory-mode config.d-only deployments have no config.json.
 		r.Detail = strings.Join(configAddonDirs(res), ", ")
 	default:
-		return checkResult{Name: "config", Status: checkFail, Detail: "no config at " + res.Info.ConfigFile, Fix: "run `nenyactl up`"}
+		return checkResult{Name: "config", Status: checkFail, Detail: "no config at " + res.Info.ConfigFile, Fix: "run `nenyactl up`", Action: actionUp}
 	}
 
 	if !haveDesc {
@@ -198,7 +491,7 @@ func checkSecrets(ctx context.Context, res dirResolution, desc nenya.Description
 		if contractErr != nil {
 			detail += " (nenya secret get: " + contractErr.Error() + ")"
 		}
-		return checkResult{Name: "secrets", Status: checkFail, Detail: detail, Fix: "run `nenyactl up`"}
+		return checkResult{Name: "secrets", Status: checkFail, Detail: detail, Fix: "run `nenyactl up`", Action: actionUp}
 	}
 
 	detail := fmt.Sprintf("client token resolves (%s)", dir)
@@ -289,7 +582,7 @@ func checkPort(ctx context.Context, doer healthDoer, res dirResolution, desc nen
 	case ok:
 		return checkResult{Name: "port", Status: checkOK, Detail: addr + " is healthy"}
 	case strings.HasPrefix(detail, "unreachable"):
-		return checkResult{Name: "port", Status: checkWarn, Detail: addr + " is free (service not running)", Fix: "nenyactl up"}
+		return checkResult{Name: "port", Status: checkWarn, Detail: addr + " is free (service not running)", Fix: "nenyactl up", Action: actionUp}
 	default:
 		return checkResult{Name: "port", Status: checkWarn, Detail: addr + ": " + detail}
 	}
@@ -307,7 +600,7 @@ func checkService(res dirResolution) checkResult {
 	if _, err := os.Stat(path); err == nil {
 		return checkResult{Name: "service", Status: checkOK, Detail: path}
 	}
-	return checkResult{Name: "service", Status: checkWarn, Detail: "no unit found at " + path, Fix: "nenyactl up"}
+	return checkResult{Name: "service", Status: checkWarn, Detail: "no unit found at " + path, Fix: "nenyactl up", Action: actionUp}
 }
 
 func shellQuoteAll(paths []string) string {
