@@ -147,7 +147,7 @@ func TestAgentsTUI_AddAgent(t *testing.T) {
 	t.Run("enter on add new agent line starts new agent", func(t *testing.T) {
 		m := newTestModel()
 		m.loadDefaults()
-		m.cursor = len(m.agents) // cursor at "add new" line
+		m.cursor = len(m.agents) + 1 // cursor at the "+ add" line
 		count := len(m.agents)
 		update(&m, tea.KeyMsg{Type: tea.KeyEnter})
 		if m.screen != screenEdit {

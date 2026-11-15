@@ -176,9 +176,16 @@ func (m *tuiModel) updateListQuit(key string) (tea.Model, tea.Cmd, bool) {
 func (m *tuiModel) updateListItem(key string) (tea.Model, tea.Cmd, bool) {
 	switch key {
 	case "enter":
-		if m.cursor < len(m.agents) {
-			m.startEdit(m.cursor)
-		} else {
+		// Cursor convention: 0 is the auto row, 1..len are agents, len+1 is
+		// the "+ add" row. Enter follows the highlight: an agent row edits
+		// that agent, the add row starts a new one. Enter on the auto row
+		// descends into the first agent (space toggles the mode itself).
+		switch {
+		case m.cursor > 0 && m.cursor <= len(m.agents):
+			m.startEdit(m.cursor - 1)
+		case m.cursor == 0 && len(m.agents) > 0:
+			m.startEdit(0)
+		default:
 			m.startNew()
 		}
 		return m, nil, true
@@ -217,7 +224,8 @@ func (m *tuiModel) updateListNavigation(key string) (tea.Model, tea.Cmd, bool) {
 		}
 		return m, nil, true
 	case "down", "j":
-		total := len(m.agents) + 1
+		// Total rows: auto row + agents + the "+ add" row.
+		total := len(m.agents) + 2
 		if m.cursor < total-1 {
 			m.cursor++
 			m.scrollAgents()
@@ -244,6 +252,10 @@ func (m *tuiModel) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c", "esc":
 		m.screen = screenList
 		m.removeEmptyAgent()
+		// Convert the 0-based edit index back to the list convention (auto
+		// row offset, clamped to the add row) so the highlight lands on the
+		// agent just edited.
+		m.returnToListCursor()
 		m.scrollAgents()
 		return m, nil
 	case "enter":
@@ -435,6 +447,10 @@ func (m *tuiModel) startEdit(idx int) {
 
 func (m *tuiModel) startNew() {
 	m.screen = screenEdit
+	// A manually created agent means manual mode: editorResult would
+	// otherwise discard the whole list while auto mode is still on
+	// (NCTL-50 review).
+	m.modeAuto = false
 	m.cursor = len(m.agents)
 	m.agents = append(m.agents, Agent{Name: "new-agent", Strategy: defaultStrategy, Models: nil})
 	m.editName.SetValue("new-agent")
@@ -495,22 +511,44 @@ func (m *tuiModel) syncAgentModels() {
 	m.agents[m.cursor].Models = selected
 }
 
+// returnToListCursor converts the 0-based edit index back to the list screen's
+// cursor convention (0 = auto row, 1..len = agents, len+1 = add row), clamped
+// to the add row (NCTL-47 review: esc from the edit screen used to land the
+// highlight one row above the edited agent).
+func (m *tuiModel) returnToListCursor() {
+	if m.cursor <= len(m.agents) {
+		m.cursor++
+	}
+}
+
 func (m *tuiModel) scrollAgents() {
-	total := len(m.agents) + 1
+	// The viewport content (renderAgentList) is the agent list plus the add
+	// row — the auto row renders above it: two physical lines per agent
+	// (name + models) plus one add row. List cursor c (1-based; 0 is the
+	// auto row above) maps to agent (c-1) whose name line sits at 2*(c-1);
+	// the add row (cursor len+1) sits at 2*len.
+	total := len(m.agents)*2 + 1
+	cursorRow := 0
+	switch {
+	case m.cursor > 0 && m.cursor <= len(m.agents):
+		cursorRow = (m.cursor - 1) * 2
+	case m.cursor == len(m.agents)+1:
+		cursorRow = len(m.agents) * 2
+	}
 	visible := m.agentsView.Height
 	if visible <= 0 {
 		return
 	}
 	half := visible / 2
-	if m.cursor < half {
+	if cursorRow < half {
 		m.agentsView.YOffset = 0
-	} else if m.cursor > total-1-half {
+	} else if cursorRow > total-1-half {
 		m.agentsView.YOffset = total - visible
 		if m.agentsView.YOffset < 0 {
 			m.agentsView.YOffset = 0
 		}
 	} else {
-		m.agentsView.YOffset = m.cursor - half
+		m.agentsView.YOffset = cursorRow - half
 	}
 	m.updateAgentContent()
 }
@@ -588,7 +626,14 @@ func (m tuiModel) viewList() string {
 	}
 
 	title := theme.Title.Render("Configure Agents")
-	autoLine := fmt.Sprintf("Auto-agents: %s  (%s)",
+	cursorMark := "  "
+	if m.cursor == 0 {
+		// The auto row is cursor-addressable (space toggles, enter
+		// descends) — show the cursor when it sits here.
+		cursorMark = "● "
+	}
+	autoLine := fmt.Sprintf("%sAuto-agents: %s  (%s)",
+		cursorMark,
 		autoStyle.Bold(true).Render(autoLabel),
 		theme.Dimmed.Render("Space to toggle, Enter to configure manually"),
 	)
@@ -637,7 +682,7 @@ func (m tuiModel) renderAgentList() string {
 
 		name := nameStyle.Bold(true).Render(a.Name)
 		strategy := theme.Dimmed.Render(a.Strategy)
-		modelsLine := theme.Dimmed.Render(fmt.Sprintf("  %d models: %s", len(a.Models), trunc(modelsStr, 50)))
+		modelsLine := theme.Dimmed.Render(fmt.Sprintf("  %d models: %s", len(a.Models), tui.Trunc(modelsStr, 50)))
 
 		line := fmt.Sprintf("%s%s  %s\n    %s",
 			style.Render(prefix),
@@ -649,7 +694,7 @@ func (m tuiModel) renderAgentList() string {
 	}
 
 	addPrefix := "  "
-	if m.cursor == len(m.agents) {
+	if m.cursor == len(m.agents)+1 {
 		addPrefix = "● "
 	}
 	addLabel := theme.Accent.Render(addPrefix + "+ Add new agent")
@@ -719,7 +764,7 @@ func (m tuiModel) viewEdit() string {
 		"",
 		modelLabel,
 		"",
-		fmt.Sprintf("  %s %s", modelLine, theme.Dimmed.Render(trunc(modelsStr, 50))),
+		fmt.Sprintf("  %s %s", modelLine, theme.Dimmed.Render(tui.Trunc(modelsStr, 50))),
 	)
 
 	baseStyle := lipgloss.NewStyle().
@@ -849,13 +894,6 @@ func (m tuiModel) viewConfirm() string {
 		Padding(4, 2)
 
 	return baseStyle.Render(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal))
-}
-
-func trunc(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max-3] + "..."
 }
 
 // RunAgentEditor runs the agent configuration TUI against the authoritative

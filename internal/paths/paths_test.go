@@ -24,6 +24,9 @@ func TestContainerDir(t *testing.T) {
 	})
 
 	t.Run("falls back to home/.local/share without XDG_DATA_HOME", func(t *testing.T) {
+		if runtime.GOOS != "linux" {
+			t.Skip("linux default path only (darwin/windows have their own)")
+		}
 		t.Setenv("XDG_DATA_HOME", "")
 
 		usr, err := user.Current()
@@ -169,12 +172,22 @@ func TestUserBinDir(t *testing.T) {
 		}
 	})
 
-	t.Run("linux with unreadable home returns error", func(t *testing.T) {
-		tmp := t.TempDir()
+	t.Run("linux with a set-but-bogus home still resolves", func(t *testing.T) {
+		if runtime.GOOS != "linux" {
+			t.Skip("linux home-resolution semantics only (os.UserHomeDir does not read $HOME on windows)")
+		}
+		// os.UserHomeDir reads $HOME on linux and does not check existence:
+		// a bogus home resolves to a (nonexistent) path, not an error. The
+		// error path is unreachable here and is pinned in paths_dirs_test.go
+		// via the For-variant.
 		t.Setenv("HOME", "/nonexistent")
-		// Override user.Current() via environment
-		t.Setenv("USERPROFILE", "/nonexistent")
-		_ = tmp
+		got, err := UserBinDir()
+		if err != nil {
+			t.Fatalf("UserBinDir() error = %v", err)
+		}
+		if want := filepath.Join("/nonexistent", ".local", "bin"); got != want {
+			t.Errorf("UserBinDir() = %v, want %v", got, want)
+		}
 	})
 
 	t.Run("windows returns LOCALAPPDATA path", func(t *testing.T) {

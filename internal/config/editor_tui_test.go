@@ -215,8 +215,9 @@ func TestEditorTUI_EditScreen(t *testing.T) {
 	setup := func(t *testing.T) *configModel {
 		m := setupModel(t, `{"server": {"listen_addr": ":8080"}}`)
 		m.loadSection("server")
-		m.screen = screenEdit
+		m.screen = screenKeys // startEdit records this as the return screen
 		m.startEdit(0)
+		m.screen = screenEdit // updateKeys sets this after startEdit
 		return &m
 	}
 
@@ -407,5 +408,32 @@ func TestEditorTUI_DiscardCancel(t *testing.T) {
 	}
 	if len(m.changes) != 1 {
 		t.Errorf("changes = %v, want the pending edit preserved on cancel", m.changes)
+	}
+}
+
+func TestEditorTUI_EmptyNameConfirmThroughHandler(t *testing.T) {
+	// Regression for the editFrom-overwrite guard (NCTL-50 review): clearing
+	// an agent name and pressing enter must land on the confirmation screen
+	// THROUGH the updateEdit handler — applyEdit arms the confirm and the
+	// return-screen overwrite must not clobber it.
+	m := setupModel(t, `{"server": {"listen_addr": ":8080"}}`)
+	m.screen = screenAgents
+	m.agents = []agentEntry{{Name: "alpha", Strategy: "fallback"}}
+	m.agentCursor = 0
+	m.startEditAgent() // screen=screenEdit, editFrom=screenAgents, input="alpha"
+	m.editInput.SetValue("")
+
+	updated := update(&m, tea.KeyMsg{Type: tea.KeyEnter})
+	if updated.screen != screenConfirmDelete {
+		t.Fatalf("screen = %v, want screenConfirmDelete (the NCTL-44 gate must survive the return-screen guard)", updated.screen)
+	}
+	if len(updated.agents) != 1 {
+		t.Errorf("agents = %d, want 1 (deletion waits for confirmation)", len(updated.agents))
+	}
+
+	// Confirming performs the delete.
+	confirmed := update(updated, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if len(confirmed.agents) != 0 {
+		t.Errorf("agents = %d, want 0 after confirmed delete", len(confirmed.agents))
 	}
 }

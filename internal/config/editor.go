@@ -119,6 +119,10 @@ type configModel struct {
 	// validationMsg is an inline error on the providers/provider-edit
 	// screens (empty key, etc.); cleared on navigation (NCTL-45).
 	validationMsg string
+	// editFrom is the screen the edit screen was entered from, so esc/enter
+	// return to the right context (agent-name edits come from the agents
+	// screen) (NCTL-50 review).
+	editFrom configScreen
 
 	// Provider-key state (NCTL-45). providerRows drives the providers
 	// screen; keyChanges holds typed (masked) values until the caller
@@ -554,11 +558,21 @@ func (m *configModel) updateAgentsAction(key string) (tea.Model, tea.Cmd, bool) 
 		m.updateAgentsContent()
 		return m, nil, true
 	case "enter":
+		if m.agentCursor == len(m.agents) {
+			// The "+ Add new agent" row: enter mirrors 'a' (NCTL-50 review —
+			// the row is highlighted and reachable, it must not be a no-op).
+			m.agents = append(m.agents, agentEntry{Name: "new-agent", Strategy: "fallback"})
+			m.agentCursor = len(m.agents) - 1
+			m.updateAgentsContent()
+			m.scrollAgents()
+		}
 		m.startEditAgent()
 		return m, nil, true
 	case "a":
 		m.agents = append(m.agents, agentEntry{Name: "new-agent", Strategy: "fallback"})
 		m.agentCursor = len(m.agents) - 1
+		m.updateAgentsContent()
+		m.scrollAgents()
 		m.startEditAgent()
 		return m, nil, true
 	case "d":
@@ -675,6 +689,7 @@ func (m *configModel) updateConfirmDelete(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.agentCursor--
 				}
 				m.updateAgentsContent()
+				m.scrollAgents()
 			}
 			m.screen = screenAgents
 		case confirmDeleteEntry:
@@ -810,11 +825,16 @@ func (m *configModel) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quit = true
 		return m, tea.Quit
 	case "esc":
-		m.screen = screenKeys
+		m.screen = m.editFrom
 		return m, nil
 	case "enter":
 		m.applyEdit()
-		m.screen = screenKeys
+		// applyAgentNameEdit may arm the delete confirmation (empty name
+		// routes through screenConfirmDelete, NCTL-44) — never clobber that
+		// transition with the return screen.
+		if m.screen != screenConfirmDelete {
+			m.screen = m.editFrom
+		}
 		return m, nil
 	}
 	// Forward typed characters (and editing keys) to the value input; the
@@ -827,6 +847,7 @@ func (m *configModel) startEdit(idx int) {
 	if idx < 0 || idx >= len(m.entries) {
 		return
 	}
+	m.editFrom = m.screen // key edits return to the keys screen
 	entry := m.entries[idx]
 	m.editKey = entry.Key
 	m.editInput.SetValue(jsonc.FieldValueString(entry.Value))
@@ -934,17 +955,21 @@ func (m *configModel) scrollAgents() {
 	if visible <= 0 {
 		return
 	}
+	// renderAgents emits two physical lines per agent (name + models) plus
+	// one line for the "+ add" row; the scroll window must count physical
+	// lines, not agents, or the highlighted agent scrolls off-screen.
+	total := len(m.agents)*2 + 1
+	cursorRow := m.agentCursor * 2
 	half := visible / 2
-	total := len(m.agents) + 1
-	if m.agentCursor < half {
+	if cursorRow < half {
 		m.agentsView.YOffset = 0
-	} else if m.agentCursor > total-1-half {
+	} else if cursorRow > total-1-half {
 		m.agentsView.YOffset = total - visible
 		if m.agentsView.YOffset < 0 {
 			m.agentsView.YOffset = 0
 		}
 	} else {
-		m.agentsView.YOffset = m.agentCursor - half
+		m.agentsView.YOffset = cursorRow - half
 	}
 	m.updateAgentsContent()
 }
@@ -1336,7 +1361,7 @@ func (m configModel) renderAgents() string {
 
 		name := nameStyle.Render(a.Name)
 		strategy := theme.Dimmed.Render(a.Strategy)
-		modelsLine := theme.Dimmed.Render(fmt.Sprintf("  %d models: %s", len(a.Models), trunc(modelsStr, 50)))
+		modelsLine := theme.Dimmed.Render(fmt.Sprintf("  %d models: %s", len(a.Models), tui.Trunc(modelsStr, 50)))
 
 		line := fmt.Sprintf("%s%s  %s\n    %s",
 			style.Render(prefix),
@@ -1562,7 +1587,8 @@ func (m *configModel) startEditAgent() {
 		// Agent editing uses the same value input as config edits; applyEdit
 		// reads editInput, so seed and focus that (not editName).
 		m.screen = screenEdit
-		m.editKey = "agent_name" // Marker for agent editing
+		m.editFrom = screenAgents // esc/enter return to the agents context
+		m.editKey = "agent_name"  // Marker for agent editing
 		m.editInput.SetValue(m.agents[m.agentCursor].Name)
 		m.editInput.CursorEnd()
 		m.editInput.Focus()
@@ -1733,13 +1759,6 @@ func RenderChanges(changes map[string]string) string {
 		fmt.Fprintf(&b, "%s = %s\n", k, changes[k])
 	}
 	return b.String()
-}
-
-func trunc(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max-3] + "..."
 }
 
 func parseLiteralValue(raw string) hujson.Literal {
