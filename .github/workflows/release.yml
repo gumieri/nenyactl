@@ -17,15 +17,15 @@ jobs:
       - uses: actions/checkout@v4.4.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
+      # Cache-free by design: a publishing pipeline must not read or write
+      # shared caches (zizmor cache-poisoning audit). Module downloads on
+      # a release run cost seconds-to-minutes at this cadence.
       - uses: actions/setup-go@v5.6.0
         with:
           go-version-file: go.mod
-
-      - uses: actions/cache@v4.3.0
-        with:
-          path: ~/go/pkg/mod
-          key: go-mod-${{ hashFiles('go.sum') }}
+          cache: false
 
       # cosign must be on PATH for goreleaser's `signs` step to sign
       # checksums.txt into checksums.txt.sigstore.json (keyless, no keys).
@@ -49,9 +49,13 @@ jobs:
           output-file: nenyactl-${{ github.ref_name }}-spdx.json
 
       - name: Upload SBOM to release
-        run: |
-          gh release upload "${{ github.ref_name }}" \
-            nenyactl-${{ github.ref_name }}-spdx.json \
-            --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Env indirection instead of template expansion: a tag name is
+          # attacker-influenced text and must never be interpolated into
+          # the run script itself (zizmor template-injection audit).
+          VERSION: ${{ github.ref_name }}
+        run: |
+          gh release upload "$VERSION" \
+            "nenyactl-${VERSION}-spdx.json" \
+            --clobber

@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v5.6.0
@@ -93,6 +95,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v5.6.0
@@ -112,6 +116,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v5.6.0
@@ -138,6 +144,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v5.6.0
@@ -152,4 +160,45 @@ jobs:
         env:
           NENYACTL_E2E: "1"
         run: go test -v ./test/e2e/... -count=1 -timeout 15m
+
+  # Fails when .github/workflows/actions.lock is out of sync with the
+  # workflows or a locked pin no longer verifies upstream (moved/deleted
+  # tag, rewritten history). Runs as its own job so it cannot be skipped
+  # by an early test failure. The extension version is pinned; bump it
+  # deliberately (its install adds no uses: refs, so no relock needed).
+  lockfile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Verify actions lockfile
+        run: |
+          gh extension install github/gh-actions-lock --pin v0.4.1
+          gh actions-lock --verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # Static security audit of the workflows themselves (injection
+  # surfaces, excessive permissions, credential persistence). Runs at
+  # the default (regular) persona; any finding fails the job. Version
+  # pinned for reproducibility; bump deliberately.
+  zizmor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: zizmorcore/zizmor-action@v0.8.1
+        with:
+          version: 1.32.0
 
