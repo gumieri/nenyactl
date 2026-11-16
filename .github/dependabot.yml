@@ -8,3 +8,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Supply-chain cooldown: freshly published action releases soak for
+    # 7 days before entering CI. Dependabot security updates bypass the
+    # cooldown. Dependabot bumps update the workflow tags AND
+    # .github/workflows/actions.lock atomically (lockfile-verified in
+    # CI; see the nenya repo's AGENTS.md §15 for the full rule set).
+    # cooldown is not supported by the go_modules ecosystem, so it is
+    # scoped to github-actions only.
+    cooldown:
+      default-days: 7
