@@ -17,23 +17,23 @@ jobs:
       security-events: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.4.0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5.6.0
         with:
           go-version-file: go.mod
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v4.3.0
         with:
           path: ~/go/pkg/mod
           key: go-mod-${{ hashFiles('go.sum') }}
 
-      - uses: github/codeql-action/init@v4
+      - uses: github/codeql-action/init@v4.39.3
         with:
           languages: go
 
-      - uses: github/codeql-action/autobuild@v4
+      - uses: github/codeql-action/autobuild@v4.39.3
 
-      - uses: github/codeql-action/analyze@v4
+      - uses: github/codeql-action/analyze@v4.39.3
         with:
           category: '/language:go'
