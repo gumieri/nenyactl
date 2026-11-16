@@ -46,12 +46,9 @@ jobs:
       - name: Run unit tests
         run: go test -v -coverprofile=coverage.out ./internal/... ./cmd/...
 
-      - name: Upload coverage
-        uses: codecov/codecov-action@v4.6.0
-        with:
-          files: coverage.out
-          fail_ci_if_error: false
-
+      # No external coverage SaaS: nenya-parity posture. The ratcheted
+      # floors below enforce coverage locally; a coverage profile would
+      # otherwise egress build/test structure to a third party.
       - name: Check coverage threshold
         # NCTL-50: per-package floors at or below the function-average
         # measured at ratchet time (containers was set ~8pp under its
