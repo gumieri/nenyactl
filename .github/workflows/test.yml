@@ -17,10 +17,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v5.6.0
         with:
           go-version: '1.26'
           cache: true
@@ -37,19 +39,16 @@ jobs:
         run: go vet ./...
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v8.0.0
         with:
           version: latest
 
       - name: Run unit tests
         run: go test -v -coverprofile=coverage.out ./internal/... ./cmd/...
 
-      - name: Upload coverage
-        uses: codecov/codecov-action@v4
-        with:
-          files: coverage.out
-          fail_ci_if_error: false
-
+      # No external coverage SaaS: nenya-parity posture. The ratcheted
+      # floors below enforce coverage locally; a coverage profile would
+      # otherwise egress build/test structure to a third party.
       - name: Check coverage threshold
         # NCTL-50: per-package floors at or below the function-average
         # measured at ratchet time (containers was set ~8pp under its
@@ -92,10 +91,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v5.6.0
         with:
           go-version: '1.26'
           cache: true
@@ -111,10 +112,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v5.6.0
         with:
           go-version: '1.26'
           cache: true
@@ -137,10 +140,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v5.6.0
         with:
           go-version: '1.26'
           cache: true
@@ -152,4 +157,45 @@ jobs:
         env:
           NENYACTL_E2E: "1"
         run: go test -v ./test/e2e/... -count=1 -timeout 15m
+
+  # Fails when .github/workflows/actions.lock is out of sync with the
+  # workflows or a locked pin no longer verifies upstream (moved/deleted
+  # tag, rewritten history). Runs as its own job so it cannot be skipped
+  # by an early test failure. The extension version is pinned; bump it
+  # deliberately (its install adds no uses: refs, so no relock needed).
+  lockfile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Verify actions lockfile
+        run: |
+          gh extension install github/gh-actions-lock --pin v0.4.1
+          gh actions-lock --verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # Static security audit of the workflows themselves (injection
+  # surfaces, excessive permissions, credential persistence). Runs at
+  # the default (regular) persona; any finding fails the job. Version
+  # pinned for reproducibility; bump deliberately.
+  zizmor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: zizmorcore/zizmor-action@v0.8.1
+        with:
+          version: 1.32.0
 

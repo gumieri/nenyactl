@@ -20,6 +20,10 @@ owns the invocation and experience, consuming nenya's contract.
 > **Status: v0.1.0.** Binary tarballs, deb/rpm/pkg packages, and Homebrew are
 > published; AUR and Nix channels are planned (the goreleaser publishers are
 > configured but their target repos/channels are not set up yet).
+>
+> **Verify before installing:** releases ship a cosign-signed `checksums.txt`
+> — see [docs/VERIFICATION.md](docs/VERIFICATION.md) for tested
+> verify-before-extract commands.
 
 ### From Source
 
