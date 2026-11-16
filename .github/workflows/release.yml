@@ -12,6 +12,11 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Deployment-protection gate: the job does not start (no build, no
+    # signing, no release upload) until the required reviewer approves
+    # the pending deployment on the run page. Even a tampered or
+    # redirected workflow cannot publish unattended.
+    environment: release
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4.4.0
